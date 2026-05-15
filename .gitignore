@@ -38,7 +38,15 @@ yarn-error.log
 testem.log
 /typings
 __screenshots__/
+/debug/
 
 # System files
 .DS_Store
 Thumbs.db
+
+# Custom
+.env
+.env.local
+list.txt
+public/**/*.json
+public/template.html
