@@ -1,2 +1,3 @@
-# performer-catalog
-A simple tool to track performer info
+# Performer Catalog
+
+A simple tool that catalogues performer data
