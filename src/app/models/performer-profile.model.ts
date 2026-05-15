@@ -1,46 +1,34 @@
 export type IsoDateString = string;
 
-export type PerformerProfileStatus = 'active' | 'inactive' | 'archived';
-
-export type PerformerDiscipline =
-  | 'actor'
-  | 'comedian'
-  | 'dancer'
-  | 'musician'
-  | 'speaker'
-  | 'variety'
-  | 'vocalist'
-  | 'other';
-
-export interface PerformerLocation {
-  readonly city: string;
-  readonly region?: string;
-  readonly country: string;
-}
-
-export interface PerformerContact {
-  readonly email?: string;
-  readonly phone?: string;
-  readonly websiteUrl?: string;
-}
-
 export interface PerformerLink {
   readonly label: string;
   readonly url: string;
 }
 
+export interface PerformerMovieCredit {
+  readonly title: string;
+  readonly year: number;
+  readonly distributor: string;
+  readonly notes?: string;
+}
+
 export interface PerformerProfile {
-  readonly id: string;
   readonly name: string;
-  readonly stageName?: string;
-  readonly pronouns?: string;
-  readonly bio?: string;
-  readonly disciplines: readonly PerformerDiscipline[];
-  readonly location?: PerformerLocation;
-  readonly contact?: PerformerContact;
-  readonly portfolioLinks: readonly PerformerLink[];
-  readonly tags: readonly string[];
-  readonly status: PerformerProfileStatus;
-  readonly createdAt: IsoDateString;
-  readonly updatedAt: IsoDateString;
+  readonly aka?: readonly string[];
+  // September 6, 1996 (29 years old) or 05/15/19?? or 05/15/????
+  readonly birthday: string;
+  // 2025 or 2016-2025 (Started around 20 years old)
+  readonly yearsActive: string;
+  readonly ageStarted?: number;
+  readonly databases?: readonly string[];
+  readonly ethnicity?: string;
+  readonly nationality?: string;
+  readonly hairColor?: string;
+  readonly eyeColor?: string;
+  readonly height?: string;
+  readonly weight?: string;
+  readonly measurements?: string;
+  readonly shoeSize?: string;
+  readonly credits?: readonly PerformerMovieCredit[];
+  readonly links?: readonly PerformerLink[];
 }
