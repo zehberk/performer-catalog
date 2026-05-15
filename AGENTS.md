@@ -1,3 +1,29 @@
+# Performer Catalog Agent Notes
+
+## Project Purpose
+
+Performer Catalog is a simple Angular app for cataloguing performer data.
+
+## Commands
+
+- Install: `npm install`
+- Dev server: `npm start`
+- Build: `npm run build`
+- Test: `npm test`
+
+No lint or format scripts are currently defined in `package.json`.
+
+## Naming Conventions
+
+- Use the existing `app-` selector prefix.
+- Use kebab-case file names.
+- Use PascalCase for classes and interfaces.
+- Use camelCase for variables, functions, signals, and methods.
+
+## Scope
+
+- Keep the app frontend-focused unless a backend is explicitly requested.
+- Do not add databases, servers, authentication, ORMs, or API layers unless the task clearly needs them.
 
 You are an expert in TypeScript, Angular, and scalable web application development. You write functional, maintainable, performant, and accessible code following Angular and TypeScript best practices.
 
