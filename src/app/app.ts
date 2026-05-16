@@ -27,9 +27,6 @@ export class App {
   readonly lookupForm = new FormGroup({
     search: new FormControl('', { nonNullable: true }),
   });
-  readonly addForm = new FormGroup({
-    name: new FormControl('', { nonNullable: true, validators: [Validators.required] }),
-  });
 
   constructor() {
     this.lookupForm.controls.search.valueChanges.subscribe((value) => this.performerLookup.updateSearchTerm(value));
@@ -40,7 +37,7 @@ export class App {
   }
 
   addPerformer(): void {
-    const name = this.addForm.controls.name.value.trim();
+    const name = this.lookupForm.controls.search.value.trim();
 
     if (!name) {
       this.addError.set('Enter a performer name.');
@@ -48,8 +45,23 @@ export class App {
     }
 
     this.performerLookup.addPerformer(name);
-    this.addForm.reset({ name: '' });
+    this.lookupForm.reset({ search: '' });
     this.addError.set(undefined);
+  }
+  
+  creditsOpen = signal(false);
+
+  toggleCredits(): void {
+    this.creditsOpen.update(open => !open);
+  }
+
+  getFaviconUrl(url: string): string {
+    try {
+      const domain = new URL(url).hostname;
+      return `https://www.google.com/s2/favicons?domain=${domain}&sz=32`;
+    } catch {
+      return '';
+    }
   }
 }
 
