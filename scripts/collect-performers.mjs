@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { JSDOM } from 'jsdom';
 import { chromium } from 'playwright';
 
@@ -23,6 +23,7 @@ const dataRootPath = new URL('../public/data/', import.meta.url);
 const performersPath = new URL('../public/data/performers/', import.meta.url);
 const studiosPath = new URL('../public/data/studios/', import.meta.url);
 const channelsPath = new URL('../public/data/channels/', import.meta.url);
+const logsPath = new URL('../logs/', import.meta.url);
 
 const args = new Map(
   process.argv
@@ -33,6 +34,12 @@ const args = new Map(
 
 const positionalLimit = process.argv.slice(2).find((arg) => /^\d+$/.test(arg));
 const limit = args.has('limit') ? Number(args.get('limit')) : Number(positionalLimit);
+const checkpointInterval = 10;
+const requestTimeoutMs = 10_000;
+const timeoutRetryDelayMs = 10_000;
+const maxTimeoutAttempts = 2;
+const runId = createRunId();
+const runLogPath = new URL(`collect-performers.${runId}.log`, logsPath);
 const localEnv = await readLocalEnv();
 const apiKey = process.env.BRAVE_SEARCH_API_KEY ?? localEnv.BRAVE_SEARCH_API_KEY;
 
@@ -46,58 +53,123 @@ const entries = (await readFile(listPath, 'utf8'))
   .filter(Boolean);
 
 const entriesToCollect = Number.isFinite(limit) ? entries.slice(0, limit) : entries;
+await initializeRunLog(entriesToCollect.length);
 
-const performers = [];
-const studios = [];
-const channels = [];
+const existingCatalog = await readExistingCatalog();
+const performers = [...existingCatalog.performers];
+const studios = [...existingCatalog.studios];
+const channels = [...existingCatalog.channels];
+const processedPerformerIds = new Set(performers.map((profile) => profile.id));
+const processedStudioIds = new Set(studios.map((profile) => profile.id));
+const processedChannelIds = new Set(channels.map((profile) => profile.id));
 let iafdBrowser;
 
 try {
-  for (const entry of entriesToCollect) {
-    const searchResults = await findProfileSearchResults(entry);
-    const primaryDataLink =
-      entry.kind === 'studio' || entry.kind === 'channel' || entry.kind === 'disambiguated'
-        ? searchResults.topResult && searchResultToDataLink(searchResults.topResult)
-        : undefined;
+  await writeCatalogData({ performers, studios, channels });
+
+  for (let index = 0; index < entriesToCollect.length; index += 1) {
+    const entry = entriesToCollect[index];
+    const entryId = createEntityId(entry.name);
+
+    if (entry.kind === 'performer' || entry.kind === 'disambiguated') {
+      if (processedPerformerIds.has(entryId)) {
+        console.log(`skipped existing performer: ${entry.name}`);
+        continue;
+      }
+    }
 
     if (entry.kind === 'studio') {
-      studios.push(createEntityProfile(entry, 'studio', primaryDataLink));
-      console.log(`studio: ${entry.name}`);
-      continue;
+      if (processedStudioIds.has(entryId)) {
+        console.log(`skipped existing studio: ${entry.name}`);
+        continue;
+      }
     }
 
     if (entry.kind === 'channel') {
-      channels.push(createEntityProfile(entry, 'channel', primaryDataLink));
-      console.log(`channel: ${entry.name}`);
-      continue;
+      if (processedChannelIds.has(entryId)) {
+        console.log(`skipped existing channel: ${entry.name}`);
+        continue;
+      }
     }
 
-    const secondaryDataLinks = await findPornModelDataLinks(entry).catch((error) => {
+    try {
+      await processEntry(entry, performers, studios, channels);
+    } catch (error) {
       console.warn(
-        `Secondary search failed for "${entry.name}": ${error instanceof Error ? error.message : String(error)}`,
+        `Entry failed for "${entry.name}": ${error instanceof Error ? error.message : String(error)}. Saving as missing.`,
       );
-
-      return [];
-    });
-    const baseDataLinks = mergeDataLinks(primaryDataLink ? [primaryDataLink] : [], secondaryDataLinks);
-    const iafdUrl = searchResults.iafdResult ? normalizeIafdUrl(searchResults.iafdResult.url) : undefined;
-
-    if (!iafdUrl) {
-      performers.push(createIncompletePerformerProfile(entry, baseDataLinks));
-      console.log(`missing: ${entry.name}`);
-      continue;
+      performers.push(createIncompletePerformerProfile(entry));
     }
 
-    const profile = await fetchIafdProfile(entry, iafdUrl, baseDataLinks);
-    performers.push(profile);
+    if (entry.kind === 'performer' || entry.kind === 'disambiguated') {
+      processedPerformerIds.add(entryId);
+    } else if (entry.kind === 'studio') {
+      processedStudioIds.add(entryId);
+    } else if (entry.kind === 'channel') {
+      processedChannelIds.add(entryId);
+    }
 
-    console.log(`${profile.completed ? 'fetched' : 'linked only'}: ${entry.name}`);
+    if ((index + 1) % checkpointInterval === 0) {
+      await writeCatalogData({ performers, studios, channels });
+      console.log(`checkpoint saved: ${index + 1}/${entriesToCollect.length}`);
+    }
   }
 } finally {
   await iafdBrowser?.close();
 }
 
 await writeCatalogData({ performers, studios, channels });
+
+async function processEntry(entry, performers, studios, channels) {
+  const searchResults = await findProfileSearchResults(entry).catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+
+    if (message.includes(' with 402')) {
+      console.warn(`Brave returned 402 for "${entry.name}". Continuing with missing profile.`);
+      return { topResult: undefined, iafdResult: undefined };
+    }
+
+    throw error;
+  });
+
+  const primaryDataLink =
+    entry.kind === 'studio' || entry.kind === 'channel' || entry.kind === 'disambiguated'
+      ? searchResults.topResult && searchResultToDataLink(searchResults.topResult)
+      : undefined;
+
+  if (entry.kind === 'studio') {
+    studios.push(createEntityProfile(entry, 'studio', primaryDataLink));
+    console.log(`studio: ${entry.name}`);
+    return;
+  }
+
+  if (entry.kind === 'channel') {
+    channels.push(createEntityProfile(entry, 'channel', primaryDataLink));
+    console.log(`channel: ${entry.name}`);
+    return;
+  }
+
+  const secondaryDataLinks = await findPornModelDataLinks(entry).catch((error) => {
+    console.warn(
+      `Secondary search failed for "${entry.name}": ${error instanceof Error ? error.message : String(error)}`,
+    );
+
+    return [];
+  });
+  const baseDataLinks = mergeDataLinks(primaryDataLink ? [primaryDataLink] : [], secondaryDataLinks);
+  const iafdUrl = searchResults.iafdResult ? normalizeIafdUrl(searchResults.iafdResult.url) : undefined;
+
+  if (!iafdUrl) {
+    performers.push(createIncompletePerformerProfile(entry, baseDataLinks));
+    console.log(`missing: ${entry.name}`);
+    return;
+  }
+
+  const profile = await fetchIafdProfile(entry, iafdUrl, baseDataLinks);
+  performers.push(profile);
+
+  console.log(`${profile.completed ? 'fetched' : 'linked only'}: ${entry.name}`);
+}
 
 function parseListEntry(line) {
   const value = line.trim();
@@ -138,12 +210,16 @@ async function findProfileSearchResults(entry) {
     search_lang: 'en',
   });
 
-  const response = await fetch(url, {
-    headers: {
-      Accept: 'application/json',
-      'X-Subscription-Token': apiKey,
+  const response = await fetchWithTimeoutRetry(
+    url,
+    {
+      headers: {
+        Accept: 'application/json',
+        'X-Subscription-Token': apiKey,
+      },
     },
-  });
+    { entryName: entry.name, apiName: 'brave.search.primary' },
+  );
 
   if (!response.ok) {
     throw new Error(`Brave search failed for "${entry.query}" with ${response.status}`);
@@ -166,12 +242,16 @@ async function findPornModelDataLinks(entry) {
     search_lang: 'en',
   });
 
-  const response = await fetch(url, {
-    headers: {
-      Accept: 'application/json',
-      'X-Subscription-Token': apiKey,
+  const response = await fetchWithTimeoutRetry(
+    url,
+    {
+      headers: {
+        Accept: 'application/json',
+        'X-Subscription-Token': apiKey,
+      },
     },
-  });
+    { entryName: entry.name, apiName: 'brave.search.secondary' },
+  );
 
   if (!response.ok) {
     throw new Error(`Brave fallback search failed for "${entry.name}" with ${response.status}`);
@@ -201,7 +281,10 @@ async function fetchIafdProfile(entry, iafdUrl, baseDataLinks) {
   page.setDefaultTimeout(15_000);
 
   try {
-    const response = await page.goto(iafdUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    const response = await withTimeoutRetry(
+      () => page.goto(iafdUrl, { waitUntil: 'domcontentloaded', timeout: requestTimeoutMs }),
+      `IAFD profile fetch for "${entry.name}"`,
+    );
 
     if (!response?.ok()) {
       return createIncompletePerformerProfile(entry, dataLinks[0]);
@@ -230,6 +313,103 @@ async function fetchIafdProfile(entry, iafdUrl, baseDataLinks) {
   } finally {
     await context.close();
   }
+}
+
+async function fetchWithTimeoutRetry(url, options, metadata) {
+  return withTimeoutRetry(async () => {
+    const startedAt = Date.now();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
+
+    try {
+      await logApiCall({
+        event: 'request_start',
+        api: metadata.apiName,
+        entry: metadata.entryName,
+        url: url.toString(),
+      });
+      const response = await fetch(url, { ...options, signal: controller.signal });
+      await logApiCall({
+        event: 'request_success',
+        api: metadata.apiName,
+        entry: metadata.entryName,
+        url: url.toString(),
+        status: response.status,
+        durationMs: Date.now() - startedAt,
+      });
+      return response;
+    } catch (error) {
+      await logApiCall({
+        event: 'request_error',
+        api: metadata.apiName,
+        entry: metadata.entryName,
+        url: url.toString(),
+        error: error instanceof Error ? error.message : String(error),
+        durationMs: Date.now() - startedAt,
+      });
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }, `request to ${url.toString()}`);
+}
+
+async function withTimeoutRetry(task, label) {
+  for (let attempt = 1; attempt <= maxTimeoutAttempts; attempt += 1) {
+    try {
+      if (attempt > 1) {
+        await appendRunLog(`[retry] ${label} attempt ${attempt}/${maxTimeoutAttempts}`);
+      }
+      return await task();
+    } catch (error) {
+      if (!isTimeoutError(error) || attempt === maxTimeoutAttempts) {
+        throw error;
+      }
+
+      console.warn(`${label} timed out. Retrying in ${timeoutRetryDelayMs / 1000} seconds...`);
+      await sleep(timeoutRetryDelayMs);
+    }
+  }
+}
+
+function isTimeoutError(error) {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  return (
+    error.name === 'AbortError' ||
+    error.name === 'TimeoutError' ||
+    /timed out|timeout|aborted/i.test(error.message)
+  );
+}
+
+function sleep(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function initializeRunLog(entryCount) {
+  await mkdir(logsPath, { recursive: true });
+  await appendRunLog(`collect-performers run started`);
+  await appendRunLog(`run_id=${runId}`);
+  await appendRunLog(`entries=${entryCount}`);
+}
+
+async function logApiCall(details) {
+  const line = JSON.stringify({
+    ts: new Date().toISOString(),
+    ...details,
+  });
+  await appendRunLog(line);
+}
+
+async function appendRunLog(message) {
+  const timestamp = new Date().toISOString();
+  await writeFile(runLogPath, `[${timestamp}] ${message}\n`, { flag: 'a' });
+}
+
+function createRunId() {
+  return new Date().toISOString().replace(/[:.]/g, '-');
 }
 
 function searchResultToDataLink(result) {
@@ -285,6 +465,48 @@ function createEntityId(name) {
     .slice(0, 80);
 }
 
+async function readExistingCatalog() {
+  const performers = await readExistingProfiles('performers');
+  const studios = await readExistingProfiles('studios');
+  const channels = await readExistingProfiles('channels');
+
+  return { performers, studios, channels };
+}
+
+async function readExistingProfiles(type) {
+  const indexUrl = new URL(`${type}.index.json`, dataRootPath);
+
+  try {
+    const indexContent = await readFile(indexUrl, 'utf8');
+    const summaries = JSON.parse(indexContent);
+
+    if (!Array.isArray(summaries)) {
+      return [];
+    }
+
+    const profiles = await Promise.all(
+      summaries.map(async (summary) => {
+        if (!summary || typeof summary.profilePath !== 'string') {
+          return undefined;
+        }
+
+        try {
+          const profileUrl = new URL(`../${summary.profilePath}`, dataRootPath);
+          const profileContent = await readFile(profileUrl, 'utf8');
+
+          return JSON.parse(profileContent);
+        } catch {
+          return undefined;
+        }
+      }),
+    );
+
+    return profiles.filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 function createIncompletePerformerProfile(entry, dataLinks) {
   return removeEmptyValues({
     id: createEntityId(entry.name),
@@ -323,14 +545,14 @@ function mergeDataLinks(...linkGroups) {
 }
 
 async function writeCatalogData(catalog) {
-  await resetDataDirectory();
+  await ensureDataDirectories();
   await writeProfileCollection('performer', performersPath, catalog.performers);
   await writeProfileCollection('studio', studiosPath, catalog.studios);
   await writeProfileCollection('channel', channelsPath, catalog.channels);
 }
 
-async function resetDataDirectory() {
-  await rm(dataRootPath, { force: true, recursive: true });
+async function ensureDataDirectories() {
+  await mkdir(dataRootPath, { recursive: true });
   await mkdir(performersPath, { recursive: true });
   await mkdir(studiosPath, { recursive: true });
   await mkdir(channelsPath, { recursive: true });
@@ -345,16 +567,31 @@ async function writeProfileCollection(type, directory, profiles) {
       id: profile.id,
       name: profile.name,
       searchName: profile.searchName,
+      aliases: profile.aka,
       completed: profile.completed,
       type,
       profilePath,
     });
 
-    await writeFile(new URL(`${profile.id}.json`, directory), `${JSON.stringify(profile, null, 2)}\n`);
+    const profileUrl = new URL(`${profile.id}.json`, directory);
+    const profileExists = await fileExists(profileUrl);
+
+    if (!profileExists) {
+      await writeFile(profileUrl, `${JSON.stringify(profile, null, 2)}\n`);
+    }
   }
 
   summaries.sort((first, second) => first.name.localeCompare(second.name));
   await writeFile(new URL(`${type}s.index.json`, dataRootPath), `${JSON.stringify(summaries, null, 2)}\n`);
+}
+
+async function fileExists(pathOrUrl) {
+  try {
+    await access(pathOrUrl);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function getIafdBrowser() {

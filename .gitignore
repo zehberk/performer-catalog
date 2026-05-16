@@ -47,7 +47,9 @@ Thumbs.db
 # Custom
 .env
 .env.local
+collect-data.log
 list.txt
+logs/*
 public/**/*.json
 public/template.html
 tools/*
