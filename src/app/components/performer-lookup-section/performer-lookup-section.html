@@ -1,0 +1,18 @@
+<section class="lookup-panel" aria-labelledby="lookup-title">
+  <h1 id="lookup-title">Performer Catalog</h1>
+
+  <form class="lookup-form" aria-label="Performer lookup" [formGroup]="lookupForm()">
+    <input
+      id="performer-search"
+      formControlName="search"
+      type="search"
+      autocomplete="off"
+      placeholder="Search or add performer"
+    />
+  </form>
+
+  <button type="button" class="add-button" (click)="onAddPerformer()">Add</button>
+  @if (addError()) {
+    <p class="form-error" role="alert">{{ addError() }}</p>
+  }
+</section>

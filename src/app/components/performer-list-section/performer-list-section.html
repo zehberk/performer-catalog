@@ -1,0 +1,27 @@
+<aside class="performer-list" aria-labelledby="performer-list-title">
+  <div class="panel-heading">
+    <h2 id="performer-list-title">Performers</h2>
+    <span>{{ performers().length }}</span>
+  </div>
+
+  @if (performers().length > 0) {
+    <div class="performer-scroll" role="listbox" aria-label="Performers">
+      @for (performer of performers(); track performer.id) {
+        <button
+          type="button"
+          class="performer-option"
+          [class.is-selected]="selectedPerformerId() === performer.id"
+          [attr.aria-selected]="selectedPerformerId() === performer.id"
+          (click)="onSelectPerformer(performer)"
+        >
+          <span>{{ performer.name }}</span>
+          @if (!performer.completed) {
+            <span class="status">Pending</span>
+          }
+        </button>
+      }
+    </div>
+  } @else {
+    <p class="empty-state">No performers match the current search.</p>
+  }
+</aside>

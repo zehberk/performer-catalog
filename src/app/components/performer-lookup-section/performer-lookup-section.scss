@@ -1,0 +1,67 @@
+.lookup-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  align-items: center;
+  padding: 1rem;
+  border: 1px solid #d7deea;
+  border-radius: 0.75rem;
+  background: #ffffff;
+}
+
+.lookup-panel h1 {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 1.75rem;
+  line-height: 1.1;
+}
+
+.lookup-form {
+  min-width: 0;
+}
+
+.lookup-form input {
+  width: 100%;
+}
+
+.add-button {
+  border: 0;
+  border-radius: 0.5rem;
+  padding: 0.7rem 1rem;
+  color: #ffffff;
+  background: #1f5eff;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.form-error {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #9b1c1c;
+  font-size: 0.875rem;
+}
+
+input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #8b95a5;
+  border-radius: 0.375rem;
+  padding: 0.7rem;
+  font: inherit;
+}
+
+button {
+  font: inherit;
+}
+
+input:focus-visible,
+button:focus-visible {
+  outline: 3px solid #193a7a;
+  outline-offset: 2px;
+}
+
+@media (max-width: 58rem) {
+  .lookup-panel {
+    grid-template-columns: 1fr;
+  }
+}

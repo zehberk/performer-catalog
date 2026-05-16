@@ -1,12 +1,19 @@
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
-import { ReactiveFormsModule, FormControl, FormGroup, Validators } from '@angular/forms';
+import { FormControl, FormGroup } from '@angular/forms';
 
+import { PerformerDetailsSectionComponent } from './components/performer-details-section/performer-details-section';
+import { PerformerListSectionComponent } from './components/performer-list-section/performer-list-section';
+import { PerformerLookupSectionComponent } from './components/performer-lookup-section/performer-lookup-section';
 import { CatalogEntitySummary } from './models';
 import { PerformerLookupService } from './services/performers/performer-lookup.service';
 
 @Component({
   selector: 'app-root',
-  imports: [ReactiveFormsModule],
+  imports: [
+    PerformerLookupSectionComponent,
+    PerformerListSectionComponent,
+    PerformerDetailsSectionComponent,
+  ],
   templateUrl: './app.html',
   styleUrl: './app.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -53,15 +60,6 @@ export class App {
 
   toggleCredits(): void {
     this.creditsOpen.update(open => !open);
-  }
-
-  getFaviconUrl(url: string): string {
-    try {
-      const domain = new URL(url).hostname;
-      return `https://www.google.com/s2/favicons?domain=${domain}&sz=32`;
-    } catch {
-      return '';
-    }
   }
 }
 

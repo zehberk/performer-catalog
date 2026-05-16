@@ -1,0 +1,153 @@
+<section class="performer-detail" aria-labelledby="performer-detail-title">
+  @if (profile(); as profileValue) {
+    <div class="detail-header">
+      <div>
+        <p class="eyebrow">Profile</p>
+        <h2 id="performer-detail-title">{{ profileValue.name }}</h2>
+        @if (profileValue.searchName && profileValue.searchName !== profileValue.name) {
+          <p class="search-name">List entry: {{ profileValue.searchName }}</p>
+        }
+
+        @if (profileValue.aka?.length) {
+          <div class="alias-line">
+            <span class="alias-line__label">Also known as:</span>
+            <ul class="inline-list alias-list">
+              @for (alias of profileValue.aka; track alias) {
+                <li>{{ alias }}</li>
+              }
+            </ul>
+          </div>
+        }
+
+        @if (profileValue.dataLinks?.length) {
+          <ul class="profile-data-links">
+            @for (link of profileValue.dataLinks; track link.url) {
+              <li class="data-link">
+                <a
+                  [href]="link.url"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="data-link__icon-link"
+                  [title]="link.label || link.url"
+                  [attr.aria-label]="link.label || link.url"
+                >
+                  <img [src]="getFaviconUrl(link.url)" alt="" class="data-link__icon" />
+                </a>
+              </li>
+            }
+          </ul>
+        }
+      </div>
+
+      <span class="detail-status">{{ profileValue.completed ? 'Collected' : 'Pending' }}</span>
+    </div>
+
+    <dl class="profile-grid">
+      @if (profileValue.birthday) {
+        <div>
+          <dt>Birthday</dt>
+          <dd>{{ profileValue.birthday }}</dd>
+        </div>
+      }
+      @if (selectedAge(); as age) {
+        <div>
+          <dt>Age</dt>
+          <dd>{{ age }}</dd>
+        </div>
+      }
+      @if (profileValue.yearsActive) {
+        <div>
+          <dt>Years active</dt>
+          <dd>{{ profileValue.yearsActive }}</dd>
+        </div>
+      }
+      @if (profileValue.ageStarted) {
+        <div>
+          <dt>Age started</dt>
+          <dd>{{ profileValue.ageStarted }}</dd>
+        </div>
+      }
+      @if (profileValue.ethnicity) {
+        <div>
+          <dt>Ethnicity</dt>
+          <dd>{{ profileValue.ethnicity }}</dd>
+        </div>
+      }
+      @if (profileValue.nationality) {
+        <div>
+          <dt>Nationality</dt>
+          <dd>{{ profileValue.nationality }}</dd>
+        </div>
+      }
+      @if (profileValue.hairColor) {
+        <div>
+          <dt>Hair</dt>
+          <dd>{{ profileValue.hairColor }}</dd>
+        </div>
+      }
+      @if (profileValue.eyeColor) {
+        <div>
+          <dt>Eyes</dt>
+          <dd>{{ profileValue.eyeColor }}</dd>
+        </div>
+      }
+      @if (profileValue.height) {
+        <div>
+          <dt>Height</dt>
+          <dd>{{ profileValue.height }}</dd>
+        </div>
+      }
+      @if (profileValue.measurements) {
+        <div>
+          <dt>Measurements</dt>
+          <dd>{{ profileValue.measurements }}</dd>
+        </div>
+      }
+    </dl>
+
+    @if (credits().length > 0) {
+      <section class="detail-section" aria-labelledby="credits-title">
+        <button
+          type="button"
+          class="panel-heading credits-toggle"
+          (click)="onToggleCredits()"
+          [attr.aria-expanded]="creditsOpen()"
+          aria-controls="credits-table"
+        >
+          <div class="credits-toggle__label">
+            <h3 id="credits-title">Credits</h3>
+            <div class="credits-toggle__icon">{{ creditsOpen() ? '▾' : '▸' }}</div>
+          </div>
+          <span>{{ credits().length }}</span>
+        </button>
+
+        @if (creditsOpen()) {
+          <div id="credits-table" class="credits-table" role="table" aria-label="Performer credits">
+            <div class="credits-row credits-head" role="row">
+              <span role="columnheader">Title</span>
+              <span role="columnheader">Year</span>
+              <span role="columnheader">Distributor</span>
+              <span role="columnheader">Notes</span>
+            </div>
+            @for (
+              credit of credits();
+              track credit.title + credit.year + credit.distributor + credit.notes
+            ) {
+              <div class="credits-row" role="row">
+                <span role="cell">{{ credit.title }}</span>
+                <span role="cell">{{ credit.year }}</span>
+                <span role="cell">{{ credit.distributor }}</span>
+                <span role="cell">{{ credit.notes }}</span>
+              </div>
+            }
+          </div>
+        }
+      </section>
+    }
+  } @else {
+    <h2 id="performer-detail-title">Profile details</h2>
+    <p class="empty-state">
+      Select a performer to view profile information, source matches, and links.
+    </p>
+  }
+</section>
