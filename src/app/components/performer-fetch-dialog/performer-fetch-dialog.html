@@ -1,0 +1,45 @@
+<button
+  type="button"
+  class="dialog-backdrop"
+  aria-label="Close fetch performer dialog"
+  (click)="onCancel()"
+></button>
+
+<section
+  class="dialog"
+  role="dialog"
+  aria-modal="true"
+  aria-labelledby="fetch-dialog-title"
+  aria-describedby="fetch-dialog-help"
+>
+  <h2 id="fetch-dialog-title">Fetch performer info</h2>
+  <p id="fetch-dialog-help">Paste an IAFD performer link for {{ performerName() }} or run a search first.</p>
+
+  <form [formGroup]="form" (ngSubmit)="onFetch()" novalidate>
+    <label for="iafd-url">IAFD performer URL</label>
+    <input
+      id="iafd-url"
+      formControlName="iafdUrl"
+      type="url"
+      inputmode="url"
+      autocomplete="off"
+      placeholder="https://www.iafd.com/person.rme/perfid=..."
+    />
+
+    @if (form.controls.iafdUrl.invalid && (form.controls.iafdUrl.dirty || form.controls.iafdUrl.touched)) {
+      <p class="form-error" role="alert">Enter an IAFD performer URL.</p>
+    }
+
+    @if (errorMessage()) {
+      <p class="form-error" role="alert">{{ errorMessage() }}</p>
+    }
+
+    <div class="dialog-actions">
+      <button type="submit" [disabled]="loading()">{{ loading() ? 'Fetching...' : 'Fetch from link' }}</button>
+      <button type="button" class="secondary" [disabled]="loading()" (click)="onSearchWithoutLink()">
+        Search without link
+      </button>
+      <button type="button" class="ghost" [disabled]="loading()" (click)="onCancel()">Cancel</button>
+    </div>
+  </form>
+</section>

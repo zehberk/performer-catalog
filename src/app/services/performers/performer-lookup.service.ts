@@ -1,7 +1,9 @@
-import { HttpClient } from '@angular/common/http';
 import { computed, inject, Injectable, signal } from '@angular/core';
+import { HttpClient } from '@angular/common/http';
+import { Observable, tap } from 'rxjs';
 
 import { CatalogEntitySummary, PerformerProfile } from '../../models';
+import { IafdProfileService } from '../iafd/iafd-profile.service';
 
 const customPerformersStorageKey = 'performer-catalog.custom-performers';
 const hiddenPerformerIdsStorageKey = 'performer-catalog.hidden-performer-ids';
@@ -11,6 +13,7 @@ const hiddenPerformerIdsStorageKey = 'performer-catalog.hidden-performer-ids';
 })
 export class PerformerLookupService {
   private readonly http = inject(HttpClient);
+  private readonly iafdProfile = inject(IafdProfileService);
   private readonly generatedPerformers = signal<readonly CatalogEntitySummary[]>([]);
   private readonly customPerformers = signal<readonly CatalogEntitySummary[]>(this.readCustomPerformers());
   private readonly hiddenGeneratedPerformerIds = signal<readonly string[]>(this.readHiddenGeneratedPerformerIds());
@@ -19,7 +22,7 @@ export class PerformerLookupService {
 
   readonly searchTerm = signal('');
   readonly selectedProfile = this.selectedProfileState.asReadonly();
-  readonly performers = computed(() => {
+  readonly performers = computed<readonly PerformerSearchResult[]>(() => {
     const searchTerm = this.searchTerm().trim().toLowerCase();
     const hiddenIds = new Set(this.hiddenGeneratedPerformerIds());
     const generatedPerformers = this.generatedPerformers().filter((performer) => !hiddenIds.has(performer.id));
@@ -31,7 +34,18 @@ export class PerformerLookupService {
       return performers;
     }
 
-    return performers.filter((performer) => performer.name.toLowerCase().includes(searchTerm));
+    return performers
+      .map((performer) => {
+        const nameMatches = performer.name.toLowerCase().includes(searchTerm);
+        const matchedAlias = performer.aliases?.find((alias) => alias.toLowerCase().includes(searchTerm));
+
+        if (!nameMatches && !matchedAlias) {
+          return undefined;
+        }
+
+        return matchedAlias ? { ...performer, matchedAlias } : performer;
+      })
+      .filter((performer): performer is PerformerSearchResult => performer !== undefined);
   });
 
   readonly selectedPerformerId = this.selectedId.asReadonly();
@@ -47,11 +61,11 @@ export class PerformerLookupService {
     this.searchTerm.set(value);
   }
 
-  addPerformer(name: string): void {
+  addPerformer(name: string): CatalogEntitySummary | undefined {
     const trimmedName = name.trim();
 
     if (!trimmedName) {
-      return;
+      return undefined;
     }
 
     const existing = [...this.generatedPerformers(), ...this.customPerformers()].some(
@@ -59,7 +73,7 @@ export class PerformerLookupService {
     );
 
     if (existing) {
-      return;
+      return undefined;
     }
 
     const performer: CatalogEntitySummary = {
@@ -75,6 +89,9 @@ export class PerformerLookupService {
 
     this.customPerformers.set(customPerformers);
     localStorage.setItem(customPerformersStorageKey, JSON.stringify(customPerformers));
+    this.selectPerformer(performer);
+
+    return performer;
   }
 
   removePerformer(summary: CatalogEntitySummary): void {
@@ -122,6 +139,15 @@ export class PerformerLookupService {
     });
   }
 
+  fetchPerformerInfoFromIafd(summary: CatalogEntitySummary, iafdUrl: string): Observable<PerformerProfile> {
+    return this.iafdProfile.fetchProfileForPerformer(summary, iafdUrl).pipe(
+      tap((profile) => {
+        this.selectedId.set(summary.id);
+        this.selectedProfileState.set(profile);
+      }),
+    );
+  }
+
   private readCustomPerformers(): readonly CatalogEntitySummary[] {
     try {
       const value = localStorage.getItem(customPerformersStorageKey);
@@ -143,6 +169,10 @@ export class PerformerLookupService {
       return [];
     }
   }
+}
+
+export interface PerformerSearchResult extends CatalogEntitySummary {
+  readonly matchedAlias?: string;
 }
 
 function createEntityId(name: string): string {

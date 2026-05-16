@@ -16,6 +16,7 @@ export interface CatalogEntitySummary {
   readonly id: string;
   readonly name: string;
   readonly searchName?: string;
+  readonly aliases?: readonly string[];
   readonly completed: boolean;
   readonly type: CatalogEntityType;
   readonly profilePath: string;

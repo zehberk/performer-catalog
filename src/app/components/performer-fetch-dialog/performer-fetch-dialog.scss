@@ -1,0 +1,102 @@
+:host,
+:host * {
+  box-sizing: border-box;
+}
+
+:host {
+  position: fixed;
+  inset: 0;
+  z-index: 1080;
+}
+
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1090;
+  border: 0;
+  padding: 0;
+  background: rgba(15, 23, 42, 0.48);
+}
+
+.dialog {
+  position: fixed;
+  z-index: 1100;
+  top: 50%;
+  left: 50%;
+  width: min(34rem, calc(100vw - 2rem));
+  transform: translate(-50%, -50%);
+  border: 1px solid #d6dbe3;
+  border-radius: 0.6rem;
+  padding: 1rem;
+  background: #ffffff;
+  box-shadow: 0 14px 32px rgba(20, 32, 61, 0.2);
+}
+
+.dialog h2 {
+  margin: 0;
+  font-size: 1.2rem;
+}
+
+.dialog p {
+  margin-top: 0.5rem;
+}
+
+label {
+  display: block;
+  margin-top: 1rem;
+  margin-bottom: 0.35rem;
+  font-weight: 700;
+}
+
+input {
+  width: 100%;
+  border: 1px solid #93a1b9;
+  border-radius: 0.45rem;
+  padding: 0.55rem 0.7rem;
+  font: inherit;
+  color: #202124;
+}
+
+.dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-top: 1rem;
+}
+
+button {
+  border: 1px solid #1d4f9a;
+  border-radius: 0.4rem;
+  padding: 0.45rem 0.8rem;
+  color: #ffffff;
+  background: #1d4f9a;
+  font: inherit;
+  cursor: pointer;
+}
+
+button.secondary {
+  border-color: #356dbe;
+  background: #356dbe;
+}
+
+button.ghost {
+  border-color: #b7c3d8;
+  color: #354052;
+  background: #ffffff;
+}
+
+button:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.form-error {
+  margin-top: 0.5rem;
+  color: #9b1c1c;
+}
+
+button:focus-visible,
+input:focus-visible {
+  outline: 3px solid #193a7a;
+  outline-offset: 2px;
+}

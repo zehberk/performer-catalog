@@ -8,17 +8,29 @@
     <div class="performer-scroll" role="listbox" aria-label="Performers">
       @for (performer of performers(); track performer.id) {
         <button
+          #performerOption
           type="button"
           class="performer-option"
+          [attr.data-performer-id]="performer.id"
           [class.is-selected]="selectedPerformerId() === performer.id"
           [attr.aria-selected]="selectedPerformerId() === performer.id"
           (click)="onSelectPerformer(performer)"
           (contextmenu)="onOpenContextMenu($event, performer)"
         >
           <span>{{ performer.name }}</span>
-          @if (!performer.completed) {
-            <span class="status">Pending</span>
-          }
+          <span class="performer-option__meta">
+            @if (performer.matchedAlias) {
+              <span
+                class="status status--alias"
+                [attr.title]="'Matched alias: ' + performer.matchedAlias"
+              >
+                {{ performer.matchedAlias }}
+              </span>
+            }
+            @if (!performer.completed) {
+              <span class="status">Pending</span>
+            }
+          </span>
         </button>
       }
     </div>

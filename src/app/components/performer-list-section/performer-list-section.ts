@@ -1,6 +1,16 @@
-import { ChangeDetectionStrategy, Component, signal, input, output } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  ElementRef,
+  effect,
+  inject,
+  input,
+  output,
+  signal,
+} from '@angular/core';
 
 import { CatalogEntitySummary } from '../../models';
+import { PerformerSearchResult } from '../../services/performers/performer-lookup.service';
 import {
   ContextMenuAction,
   PerformerContextMenuComponent,
@@ -15,14 +25,48 @@ import {
 })
 export class PerformerListSectionComponent {
   private readonly removeActionId = 'remove-performer';
-  readonly performers = input.required<readonly CatalogEntitySummary[]>();
+  private readonly fetchPerformerInfo = 'fetch-performer-info';
+  private readonly hostElement = inject(ElementRef<HTMLElement>);
+  private previousSelectedPerformerId: string | undefined;
+  readonly performers = input.required<readonly PerformerSearchResult[]>();
   readonly selectedPerformerId = input<string | undefined>(undefined);
   readonly performerSelected = output<CatalogEntitySummary>();
   readonly performerRemoved = output<CatalogEntitySummary>();
+  readonly performerFetchRequested = output<CatalogEntitySummary>();
   readonly contextMenu = signal<ContextMenuState | undefined>(undefined);
   readonly contextMenuActions: readonly ContextMenuAction[] = [
+    { id: this.fetchPerformerInfo, label: 'Fetch performer info', destructive: false },
     { id: this.removeActionId, label: 'Remove performer', destructive: true },
   ];
+
+  constructor() {
+    effect(() => {
+      const selectedPerformerId = this.selectedPerformerId();
+
+      if (!selectedPerformerId) {
+        this.previousSelectedPerformerId = undefined;
+        return;
+      }
+
+      if (selectedPerformerId === this.previousSelectedPerformerId) {
+        return;
+      }
+
+      this.previousSelectedPerformerId = selectedPerformerId;
+      queueMicrotask(() => {
+        const selectedButton = this.hostElement.nativeElement.querySelector(
+          `[data-performer-id="${selectedPerformerId}"]`,
+        ) as HTMLButtonElement | null;
+
+        if (!selectedButton) {
+          return;
+        }
+
+        selectedButton.scrollIntoView({ block: 'center' });
+        selectedButton.focus();
+      });
+    });
+  }
 
   onSelectPerformer(performer: CatalogEntitySummary): void {
     this.performerSelected.emit(performer);
@@ -40,12 +84,20 @@ export class PerformerListSectionComponent {
   onMenuActionSelected(actionId: string): void {
     const menu = this.contextMenu();
 
-    if (!menu || actionId !== this.removeActionId) {
+    if (!menu) {
       return;
     }
 
-    this.performerRemoved.emit(menu.performer);
-    this.contextMenu.set(undefined);
+    if (actionId === this.removeActionId) {
+      this.performerRemoved.emit(menu.performer);
+      this.contextMenu.set(undefined);
+      return;
+    }
+
+    if (actionId === this.fetchPerformerInfo) {
+      this.performerFetchRequested.emit(menu.performer);
+      this.contextMenu.set(undefined);
+    }
   }
 }
 

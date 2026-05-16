@@ -2,9 +2,11 @@ import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@a
 import { FormControl, FormGroup } from '@angular/forms';
 
 import { PerformerDetailsSectionComponent } from './components/performer-details-section/performer-details-section';
+import { PerformerFetchDialogComponent } from './components/performer-fetch-dialog/performer-fetch-dialog';
 import { PerformerListSectionComponent } from './components/performer-list-section/performer-list-section';
 import { PerformerLookupSectionComponent } from './components/performer-lookup-section/performer-lookup-section';
 import { CatalogEntitySummary } from './models';
+import { BraveSearchService } from './services/brave-search/brave-search.service';
 import { PerformerLookupService } from './services/performers/performer-lookup.service';
 
 @Component({
@@ -13,6 +15,7 @@ import { PerformerLookupService } from './services/performers/performer-lookup.s
     PerformerLookupSectionComponent,
     PerformerListSectionComponent,
     PerformerDetailsSectionComponent,
+    PerformerFetchDialogComponent,
   ],
   templateUrl: './app.html',
   styleUrl: './app.scss',
@@ -20,11 +23,15 @@ import { PerformerLookupService } from './services/performers/performer-lookup.s
 })
 export class App {
   private readonly performerLookup = inject(PerformerLookupService);
+  private readonly braveSearch = inject(BraveSearchService);
 
   readonly performers = this.performerLookup.performers;
   readonly selectedProfile = this.performerLookup.selectedProfile;
   readonly selectedPerformerId = this.performerLookup.selectedPerformerId;
   readonly addError = signal<string | undefined>(undefined);
+  readonly fetchDialogPerformer = signal<CatalogEntitySummary | undefined>(undefined);
+  readonly fetchDialogError = signal<string | undefined>(undefined);
+  readonly fetchDialogLoading = signal(false);
   readonly selectedAge = computed(() => {
     const birthday = this.selectedProfile()?.birthday;
 
@@ -36,7 +43,9 @@ export class App {
   });
 
   constructor() {
-    this.lookupForm.controls.search.valueChanges.subscribe((value) => this.performerLookup.updateSearchTerm(value));
+    this.lookupForm.controls.search.valueChanges.subscribe((value) =>
+      this.performerLookup.updateSearchTerm(value),
+    );
   }
 
   selectPerformer(summary: CatalogEntitySummary): void {
@@ -59,11 +68,54 @@ export class App {
     this.lookupForm.reset({ search: '' });
     this.addError.set(undefined);
   }
-  
+
+  openFetchDialog(summary: CatalogEntitySummary): void {
+    this.fetchDialogPerformer.set(summary);
+    this.fetchDialogError.set(undefined);
+    this.fetchDialogLoading.set(false);
+  }
+
+  closeFetchDialog(): void {
+    this.fetchDialogPerformer.set(undefined);
+    this.fetchDialogError.set(undefined);
+    this.fetchDialogLoading.set(false);
+  }
+
+  fetchFromIafdLink(iafdUrl: string): void {
+    const performer = this.fetchDialogPerformer();
+
+    if (!performer || this.fetchDialogLoading()) {
+      return;
+    }
+
+    this.fetchDialogLoading.set(true);
+    this.fetchDialogError.set(undefined);
+    this.performerLookup.fetchPerformerInfoFromIafd(performer, iafdUrl).subscribe({
+      next: () => this.closeFetchDialog(),
+      error: (error: unknown) => {
+        const message =
+          error instanceof Error ? error.message : 'Unable to fetch performer data right now.';
+        this.fetchDialogError.set(message);
+        this.fetchDialogLoading.set(false);
+      },
+    });
+  }
+
+  searchWithoutIafdLink(): void {
+    const performer = this.fetchDialogPerformer();
+
+    if (!performer) {
+      return;
+    }
+
+    const searchUrl = this.braveSearch.createIafdSearchUrl(performer.name);
+    window.open(searchUrl, '_blank', 'noopener');
+  }
+
   creditsOpen = signal(false);
 
   toggleCredits(): void {
-    this.creditsOpen.update(open => !open);
+    this.creditsOpen.update((open) => !open);
   }
 }
 

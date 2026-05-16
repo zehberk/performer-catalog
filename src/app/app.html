@@ -12,6 +12,7 @@
         [selectedPerformerId]="selectedPerformerId()"
         (performerSelected)="selectPerformer($event)"
         (performerRemoved)="removePerformer($event)"
+        (performerFetchRequested)="openFetchDialog($event)"
       />
     </aside>
 
@@ -22,4 +23,15 @@
       (toggleCredits)="toggleCredits()"
     />
   </section>
+
+  @if (fetchDialogPerformer(); as performer) {
+    <app-performer-fetch-dialog
+      [performerName]="performer.name"
+      [loading]="fetchDialogLoading()"
+      [errorMessage]="fetchDialogError()"
+      (fetchRequested)="fetchFromIafdLink($event)"
+      (searchWithoutLinkRequested)="searchWithoutIafdLink()"
+      (cancelRequested)="closeFetchDialog()"
+    />
+  }
 </main>

@@ -4,7 +4,13 @@
   aria-label="Close performer actions"
   (click)="onCloseMenu()"
 ></button>
-<div class="context-menu" [style.left.px]="x()" [style.top.px]="y()" role="menu">
+<div
+  #contextMenu
+  class="context-menu"
+  [style.left.px]="position().left"
+  [style.top.px]="position().top"
+  role="menu"
+>
   @for (action of actions(); track action.id) {
     <button
       type="button"
