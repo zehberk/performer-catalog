@@ -1,4 +1,5 @@
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
+import { HttpErrorResponse } from '@angular/common/http';
 import { FormControl, FormGroup } from '@angular/forms';
 
 import { PerformerDetailsSectionComponent } from './components/performer-details-section/performer-details-section';
@@ -93,6 +94,11 @@ export class App {
     this.performerLookup.fetchPerformerInfoFromIafd(performer, iafdUrl).subscribe({
       next: () => this.closeFetchDialog(),
       error: (error: unknown) => {
+        if (isTransientRequestAbort(error)) {
+          this.fetchDialogLoading.set(false);
+          return;
+        }
+
         const message =
           error instanceof Error ? error.message : 'Unable to fetch performer data right now.';
         this.fetchDialogError.set(message);
@@ -136,4 +142,27 @@ function calculateAge(birthday: string, today = new Date()): number | undefined 
   }
 
   return age;
+}
+
+function isTransientRequestAbort(error: unknown): boolean {
+  if (!(error instanceof HttpErrorResponse)) {
+    return false;
+  }
+
+  const progressEvent = error.error;
+  const eventType = progressEvent instanceof ProgressEvent ? progressEvent.type : undefined;
+
+  if (eventType === 'abort') {
+    return true;
+  }
+
+  if (error.status !== 0) {
+    return false;
+  }
+
+  if (eventType === 'error') {
+    return true;
+  }
+
+  return /unknown error/i.test(error.statusText);
 }
