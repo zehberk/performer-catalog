@@ -6,6 +6,7 @@
     "start": "ng serve",
     "build": "ng build",
     "collect:data": "node scripts/collect-performers.mjs",
+    "index:aliases": "node scripts/update-performer-index-aliases.mjs",
     "debug:iafd": "node scripts/debug-iafd-page.mjs",
     "watch": "ng build --watch --configuration development",
     "test": "ng test"

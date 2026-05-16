@@ -23,3 +23,11 @@ npm run collect:data -- --limit 1
 ```
 
 The parser currently extracts basic profile fields. Add movie-credit extraction after the profile fetch and field matching are reliable.
+
+## Alias Index Refresh
+
+To refresh `public/data/performers.index.json` aliases from existing performer profile files (no Brave/IAFD calls):
+
+```bash
+npm run index:aliases
+```
