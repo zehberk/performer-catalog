@@ -43,6 +43,10 @@ export class App {
     this.performerLookup.selectPerformer(summary);
   }
 
+  removePerformer(summary: CatalogEntitySummary): void {
+    this.performerLookup.removePerformer(summary);
+  }
+
   addPerformer(): void {
     const name = this.lookupForm.controls.search.value.trim();
 

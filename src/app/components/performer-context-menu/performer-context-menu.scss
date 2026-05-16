@@ -1,0 +1,47 @@
+.context-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+}
+
+.context-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 11rem;
+  padding: 0.35rem;
+  border: 1px solid #d6dbe3;
+  border-radius: 0.5rem;
+  background: #ffffff;
+  box-shadow: 0 8px 18px rgba(20, 32, 61, 0.16);
+}
+
+.context-menu__item {
+  width: 100%;
+  border: 0;
+  border-radius: 0.35rem;
+  padding: 0.45rem 0.6rem;
+  color: #1f2937;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+
+.context-menu__item:hover {
+  background: #f3f4f6;
+}
+
+.context-menu__item--destructive {
+  color: #9b1c1c;
+}
+
+.context-menu__item--destructive:hover {
+  background: #fef2f2;
+}
+
+button:focus-visible {
+  outline: 3px solid #193a7a;
+  outline-offset: 2px;
+}

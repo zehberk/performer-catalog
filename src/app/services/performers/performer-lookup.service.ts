@@ -4,6 +4,7 @@ import { computed, inject, Injectable, signal } from '@angular/core';
 import { CatalogEntitySummary, PerformerProfile } from '../../models';
 
 const customPerformersStorageKey = 'performer-catalog.custom-performers';
+const hiddenPerformerIdsStorageKey = 'performer-catalog.hidden-performer-ids';
 
 @Injectable({
   providedIn: 'root',
@@ -12,6 +13,7 @@ export class PerformerLookupService {
   private readonly http = inject(HttpClient);
   private readonly generatedPerformers = signal<readonly CatalogEntitySummary[]>([]);
   private readonly customPerformers = signal<readonly CatalogEntitySummary[]>(this.readCustomPerformers());
+  private readonly hiddenGeneratedPerformerIds = signal<readonly string[]>(this.readHiddenGeneratedPerformerIds());
   private readonly selectedProfileState = signal<PerformerProfile | undefined>(undefined);
   private readonly selectedId = signal<string | undefined>(undefined);
 
@@ -19,7 +21,9 @@ export class PerformerLookupService {
   readonly selectedProfile = this.selectedProfileState.asReadonly();
   readonly performers = computed(() => {
     const searchTerm = this.searchTerm().trim().toLowerCase();
-    const performers = [...this.generatedPerformers(), ...this.customPerformers()].sort((first, second) =>
+    const hiddenIds = new Set(this.hiddenGeneratedPerformerIds());
+    const generatedPerformers = this.generatedPerformers().filter((performer) => !hiddenIds.has(performer.id));
+    const performers = [...generatedPerformers, ...this.customPerformers()].sort((first, second) =>
       first.name.localeCompare(second.name),
     );
 
@@ -73,6 +77,26 @@ export class PerformerLookupService {
     localStorage.setItem(customPerformersStorageKey, JSON.stringify(customPerformers));
   }
 
+  removePerformer(summary: CatalogEntitySummary): void {
+    const customPerformers = this.customPerformers();
+    const isCustomPerformer = customPerformers.some((performer) => performer.id === summary.id);
+
+    if (isCustomPerformer) {
+      const updatedCustomPerformers = customPerformers.filter((performer) => performer.id !== summary.id);
+      this.customPerformers.set(updatedCustomPerformers);
+      localStorage.setItem(customPerformersStorageKey, JSON.stringify(updatedCustomPerformers));
+    } else {
+      const hiddenIds = [...new Set([...this.hiddenGeneratedPerformerIds(), summary.id])];
+      this.hiddenGeneratedPerformerIds.set(hiddenIds);
+      localStorage.setItem(hiddenPerformerIdsStorageKey, JSON.stringify(hiddenIds));
+    }
+
+    if (this.selectedId() === summary.id) {
+      this.selectedId.set(undefined);
+      this.selectedProfileState.set(undefined);
+    }
+  }
+
   selectPerformer(summary: CatalogEntitySummary): void {
     this.selectedId.set(summary.id);
 
@@ -104,6 +128,17 @@ export class PerformerLookupService {
       const performers = value ? (JSON.parse(value) as readonly CatalogEntitySummary[]) : [];
 
       return performers.filter((performer) => performer.type === 'performer');
+    } catch {
+      return [];
+    }
+  }
+
+  private readHiddenGeneratedPerformerIds(): readonly string[] {
+    try {
+      const value = localStorage.getItem(hiddenPerformerIdsStorageKey);
+      const ids = value ? (JSON.parse(value) as readonly unknown[]) : [];
+
+      return ids.filter((id): id is string => typeof id === 'string');
     } catch {
       return [];
     }

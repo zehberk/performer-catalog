@@ -1,0 +1,19 @@
+<button
+  type="button"
+  class="context-menu-backdrop"
+  aria-label="Close performer actions"
+  (click)="onCloseMenu()"
+></button>
+<div class="context-menu" [style.left.px]="x()" [style.top.px]="y()" role="menu">
+  @for (action of actions(); track action.id) {
+    <button
+      type="button"
+      class="context-menu__item"
+      [class.context-menu__item--destructive]="action.destructive"
+      role="menuitem"
+      (click)="onActionSelected(action.id)"
+    >
+      {{ action.label }}
+    </button>
+  }
+</div>

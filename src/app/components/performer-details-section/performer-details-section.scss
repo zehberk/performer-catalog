@@ -1,8 +1,10 @@
 .performer-detail {
   display: grid;
   align-content: start;
+  height: 100%;
+  min-height: 0;
   gap: 1rem;
-  min-height: 25%;
+  overflow: auto;
   padding: 1rem;
   border: 1px solid #d6dbe3;
   border-radius: 0.5rem;

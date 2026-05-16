@@ -13,6 +13,7 @@
           [class.is-selected]="selectedPerformerId() === performer.id"
           [attr.aria-selected]="selectedPerformerId() === performer.id"
           (click)="onSelectPerformer(performer)"
+          (contextmenu)="onOpenContextMenu($event, performer)"
         >
           <span>{{ performer.name }}</span>
           @if (!performer.completed) {
@@ -23,5 +24,15 @@
     </div>
   } @else {
     <p class="empty-state">No performers match the current search.</p>
+  }
+
+  @if (contextMenu(); as menu) {
+    <app-performer-context-menu
+      [x]="menu.x"
+      [y]="menu.y"
+      [actions]="contextMenuActions"
+      (menuClosed)="onCloseContextMenu()"
+      (actionSelected)="onMenuActionSelected($event)"
+    />
   }
 </aside>
