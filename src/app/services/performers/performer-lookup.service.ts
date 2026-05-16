@@ -15,8 +15,12 @@ export class PerformerLookupService {
   private readonly http = inject(HttpClient);
   private readonly iafdProfile = inject(IafdProfileService);
   private readonly generatedPerformers = signal<readonly CatalogEntitySummary[]>([]);
-  private readonly customPerformers = signal<readonly CatalogEntitySummary[]>(this.readCustomPerformers());
-  private readonly hiddenGeneratedPerformerIds = signal<readonly string[]>(this.readHiddenGeneratedPerformerIds());
+  private readonly customPerformers = signal<readonly CatalogEntitySummary[]>(
+    this.readCustomPerformers(),
+  );
+  private readonly hiddenGeneratedPerformerIds = signal<readonly string[]>(
+    this.readHiddenGeneratedPerformerIds(),
+  );
   private readonly selectedProfileState = signal<PerformerProfile | undefined>(undefined);
   private readonly selectedId = signal<string | undefined>(undefined);
 
@@ -25,7 +29,9 @@ export class PerformerLookupService {
   readonly performers = computed<readonly PerformerSearchResult[]>(() => {
     const searchTerm = this.searchTerm().trim().toLowerCase();
     const hiddenIds = new Set(this.hiddenGeneratedPerformerIds());
-    const generatedPerformers = this.generatedPerformers().filter((performer) => !hiddenIds.has(performer.id));
+    const generatedPerformers = this.generatedPerformers().filter(
+      (performer) => !hiddenIds.has(performer.id),
+    );
     const performers = [...generatedPerformers, ...this.customPerformers()].sort((first, second) =>
       first.name.localeCompare(second.name),
     );
@@ -37,7 +43,9 @@ export class PerformerLookupService {
     return performers
       .map((performer) => {
         const nameMatches = performer.name.toLowerCase().includes(searchTerm);
-        const matchedAlias = performer.aliases?.find((alias) => alias.toLowerCase().includes(searchTerm));
+        const matchedAlias = performer.aliases?.find((alias) =>
+          alias.toLowerCase().includes(searchTerm),
+        );
 
         if (!nameMatches && !matchedAlias) {
           return undefined;
@@ -63,13 +71,14 @@ export class PerformerLookupService {
 
   addPerformer(name: string): CatalogEntitySummary | undefined {
     const trimmedName = name.trim();
+    const displayName = capitalizeWords(trimmedName);
 
-    if (!trimmedName) {
+    if (!displayName) {
       return undefined;
     }
 
     const existing = [...this.generatedPerformers(), ...this.customPerformers()].some(
-      (performer) => performer.name.toLowerCase() === trimmedName.toLowerCase(),
+      (performer) => performer.name.toLowerCase() === displayName.toLowerCase(),
     );
 
     if (existing) {
@@ -77,8 +86,8 @@ export class PerformerLookupService {
     }
 
     const performer: CatalogEntitySummary = {
-      id: createEntityId(trimmedName),
-      name: trimmedName,
+      id: createEntityId(displayName),
+      name: displayName,
       completed: false,
       type: 'performer',
       profilePath: '',
@@ -99,7 +108,9 @@ export class PerformerLookupService {
     const isCustomPerformer = customPerformers.some((performer) => performer.id === summary.id);
 
     if (isCustomPerformer) {
-      const updatedCustomPerformers = customPerformers.filter((performer) => performer.id !== summary.id);
+      const updatedCustomPerformers = customPerformers.filter(
+        (performer) => performer.id !== summary.id,
+      );
       this.customPerformers.set(updatedCustomPerformers);
       localStorage.setItem(customPerformersStorageKey, JSON.stringify(updatedCustomPerformers));
     } else {
@@ -139,7 +150,10 @@ export class PerformerLookupService {
     });
   }
 
-  fetchPerformerInfoFromIafd(summary: CatalogEntitySummary, iafdUrl: string): Observable<PerformerProfile> {
+  fetchPerformerInfoFromIafd(
+    summary: CatalogEntitySummary,
+    iafdUrl: string,
+  ): Observable<PerformerProfile> {
     return this.iafdProfile.fetchProfileForPerformer(summary, iafdUrl).pipe(
       tap((profile) => {
         this.selectedId.set(summary.id);
@@ -182,4 +196,12 @@ function createEntityId(name: string): string {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-|-$/g, '')
     .slice(0, 80);
+}
+
+function capitalizeWords(value: string): string {
+  return value
+    .trim()
+    .split(/\s+/)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(' ');
 }
