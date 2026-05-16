@@ -1,24 +1,22 @@
 :host {
   display: block;
-  min-height: 100dvh;
+  height: 100%;
+  overflow: hidden;
   color: #202124;
   background: #f6f8fb;
   font-family: Arial, Helvetica, sans-serif;
 }
 
-html,
-body {
-  height: 100%;
-}
-
 .app-shell {
-  min-height: 100vh;
+  height: 100%;
   padding: 1rem;
   box-sizing: border-box;
 }
 
 .catalog-layout {
-  min-height: calc(100vh - 2rem);
+  height: calc(100% - 2rem);
+  min-height: 0;
+  margin-bottom: 1rem;
   display: grid;
   grid-template-columns: minmax(18rem, 24rem) minmax(0, 1fr);
   gap: 1rem;
@@ -27,8 +25,9 @@ body {
 
 .sidebar-column {
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
   gap: 1rem;
-  align-content: start;
 }
 
 @media (max-width: 58rem) {
