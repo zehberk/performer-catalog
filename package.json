@@ -8,6 +8,9 @@
     "collect:data": "node scripts/collect-performers.mjs",
     "index:aliases": "node scripts/update-performer-index-aliases.mjs",
     "debug:iafd": "node scripts/debug-iafd-page.mjs",
+    "start:proxy": "node scripts/playwright-proxy/server.mjs",
+    "start:dev": "concurrently -k \"npm run start:proxy\" \"npm start\"",
+    "proxy:check": "node scripts/playwright-proxy/check-proxy.mjs",
     "watch": "ng build --watch --configuration development",
     "test": "ng test"
   },
@@ -29,6 +32,7 @@
     "@angular/compiler-cli": "^21.2.0",
     "jsdom": "^28.0.0",
     "playwright": "^1.60.0",
+    "concurrently": "^8.2.0",
     "prettier": "^3.8.1",
     "typescript": "~5.9.2",
     "vitest": "^4.0.8"

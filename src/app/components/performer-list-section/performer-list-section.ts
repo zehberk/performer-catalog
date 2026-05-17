@@ -1,7 +1,9 @@
 import {
   ChangeDetectionStrategy,
   Component,
+  DestroyRef,
   ElementRef,
+  afterNextRender,
   effect,
   inject,
   input,
@@ -24,10 +26,25 @@ import {
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class PerformerListSectionComponent {
+  private static readonly listScrollTopStorageKey = 'performer-catalog.list-scroll-top';
   private readonly removeActionId = 'remove-performer';
   private readonly fetchPerformerInfo = 'fetch-performer-info';
   private readonly hostElement = inject(ElementRef<HTMLElement>);
+  private readonly destroyRef = inject(DestroyRef);
   private previousSelectedPerformerId: string | undefined;
+  private previousSelectionRenderKey: string | undefined;
+  private readonly onListScroll = (event: Event): void => {
+    const target = event.target;
+
+    if (!(target instanceof HTMLElement)) {
+      return;
+    }
+
+    sessionStorage.setItem(
+      PerformerListSectionComponent.listScrollTopStorageKey,
+      String(target.scrollTop),
+    );
+  };
   readonly performers = input.required<readonly PerformerSearchResult[]>();
   readonly selectedPerformerId = input<string | undefined>(undefined);
   readonly performerSelected = output<CatalogEntitySummary>();
@@ -40,19 +57,44 @@ export class PerformerListSectionComponent {
   ];
 
   constructor() {
+    afterNextRender(() => {
+      const list = this.hostElement.nativeElement.querySelector('.performer-scroll');
+
+      if (!(list instanceof HTMLElement)) {
+        return;
+      }
+
+      const storedScrollTop = Number.parseInt(
+        sessionStorage.getItem(PerformerListSectionComponent.listScrollTopStorageKey) ?? '',
+        10,
+      );
+
+      if (Number.isFinite(storedScrollTop) && storedScrollTop >= 0) {
+        list.scrollTop = storedScrollTop;
+      }
+
+      list.addEventListener('scroll', this.onListScroll, { passive: true });
+      this.destroyRef.onDestroy(() => list.removeEventListener('scroll', this.onListScroll));
+    });
+
     effect(() => {
       const selectedPerformerId = this.selectedPerformerId();
+      const performerIds = this.performers().map((performer) => performer.id);
+      const selectionRenderKey = `${selectedPerformerId ?? ''}|${performerIds.join(',')}`;
 
       if (!selectedPerformerId) {
         this.previousSelectedPerformerId = undefined;
+        this.previousSelectionRenderKey = undefined;
         return;
       }
 
-      if (selectedPerformerId === this.previousSelectedPerformerId) {
+      if (selectionRenderKey === this.previousSelectionRenderKey) {
         return;
       }
 
+      const didSelectionChange = selectedPerformerId !== this.previousSelectedPerformerId;
       this.previousSelectedPerformerId = selectedPerformerId;
+      this.previousSelectionRenderKey = selectionRenderKey;
       queueMicrotask(() => {
         const selectedButton = this.hostElement.nativeElement.querySelector(
           `[data-performer-id="${selectedPerformerId}"]`,
@@ -62,8 +104,20 @@ export class PerformerListSectionComponent {
           return;
         }
 
-        selectedButton.scrollIntoView({ block: 'center' });
-        selectedButton.focus();
+        const list = this.hostElement.nativeElement.querySelector('.performer-scroll');
+
+        if (!(list instanceof HTMLElement)) {
+          return;
+        }
+
+        const selectedBounds = selectedButton.getBoundingClientRect();
+        const listBounds = list.getBoundingClientRect();
+        const isVisible =
+          selectedBounds.top >= listBounds.top && selectedBounds.bottom <= listBounds.bottom;
+
+        if (didSelectionChange || !isVisible) {
+          selectedButton.scrollIntoView({ block: 'center', inline: 'nearest' });
+        }
       });
     });
   }

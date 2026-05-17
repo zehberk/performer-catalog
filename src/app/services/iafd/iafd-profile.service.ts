@@ -1,6 +1,6 @@
 import { HttpClient } from '@angular/common/http';
 import { inject, Injectable } from '@angular/core';
-import { Observable, catchError, map, throwError } from 'rxjs';
+import { Observable, catchError, firstValueFrom, from, map, throwError } from 'rxjs';
 
 import { CatalogEntitySummary, PerformerProfile } from '../../models';
 
@@ -24,8 +24,6 @@ export class IafdProfileService {
 
     return this.fetchIafdDocument(iafdUrl).pipe(
       map((html) => {
-        console.log(html);
-        debugger;
         if (!isIafdProfilePage(html)) {
           throw new Error('The URL did not resolve to an IAFD performer profile page.');
         }
@@ -36,26 +34,34 @@ export class IafdProfileService {
   }
 
   private fetchIafdDocument(iafdUrl: string): Observable<string> {
-    return this.http
-      .get(iafdUrl, { responseType: 'text' })
-      .pipe(catchError(() => this.fetchViaReaderProxy(iafdUrl)));
-  }
+    const localProxy = `http://localhost:3789/fetch?url=${encodeURIComponent(iafdUrl)}`;
 
-  private fetchViaReaderProxy(iafdUrl: string): Observable<string> {
-    const proxyUrl = `https://r.jina.ai/http://${iafdUrl.replace(/^https?:\/\//, '')}`;
+    const promise = (async () => {
+      try {
+        return await firstValueFrom(this.http.get(localProxy, { responseType: 'text' }));
+      } catch {
+        try {
+          return await firstValueFrom(this.http.get(iafdUrl, { responseType: 'text' }));
+        } catch {
+          throw new Error(
+            'Unable to load the IAFD page. Start the local proxy with `npm run start:proxy` and try again.',
+          );
+        }
+      }
+    })();
 
-    return this.http
-      .get(proxyUrl, { responseType: 'text' })
-      .pipe(
-        catchError(() =>
-          throwError(
-            () =>
-              new Error(
-                'Unable to load the IAFD page. Check the link and try again. If it keeps failing, the site may be blocking browser access.',
-              ),
-          ),
+    return from(promise).pipe(
+      catchError((error: unknown) =>
+        throwError(
+          () =>
+            (error instanceof Error
+              ? error
+              : new Error(
+                  'Unable to load the IAFD page. Start the local proxy with `npm run start:proxy` and try again.',
+                )),
         ),
-      );
+      ),
+    );
   }
 
   private normalizeIafdUrl(value: string): string | undefined {
@@ -83,16 +89,12 @@ export class IafdProfileService {
   private parseProfile(
     summary: CatalogEntitySummary,
     iafdUrl: string,
-    content: string,
+    html: string,
   ): PerformerProfile {
-    const isMarkdown = isReaderProxyMarkdown(content);
-    const document = isMarkdown ? undefined : new DOMParser().parseFromString(content, 'text/html');
-    const bio = document ? collectBioFields(document) : collectBioFieldsFromMarkdown(content);
+    const document = new DOMParser().parseFromString(html, 'text/html');
+    const bio = collectBioFields(document);
     const yearsActive = bio.get('years active');
-    const name =
-      (document
-        ? cleanValue(document.querySelector('h1')?.textContent)
-        : extractNameFromMarkdown(content)) ?? summary.name;
+    const name = cleanValue(document.querySelector('h1')?.textContent) ?? summary.name;
 
     return removeEmptyValues<PerformerProfile>({
       id: summary.id,
@@ -112,6 +114,8 @@ export class IafdProfileService {
       weight: bio.get('weight'),
       measurements: bio.get('measurements'),
       shoeSize: bio.get('shoe size'),
+      databases: extractDatabases(document),
+      credits: extractMovieCreditsFromDocument(document),
       dataLinks: [{ label: 'IAFD', source: 'iafd', url: iafdUrl }],
     });
   }
@@ -170,6 +174,82 @@ function nodeToText(node: ChildNode): string {
   return clone.textContent ?? '';
 }
 
+function extractDatabases(
+  document: Document,
+): readonly { label: string; url: string }[] | undefined {
+  const databaseHeading = Array.from(document.querySelectorAll('.bioheading')).find(
+    (heading) => normalizeText(heading.textContent ?? '') === 'databases',
+  );
+
+  if (!databaseHeading) {
+    return undefined;
+  }
+
+  const links: { label: string; url: string }[] = [];
+  let sibling: ChildNode | null = databaseHeading.nextSibling;
+
+  while (sibling) {
+    if (sibling.nodeType === Node.ELEMENT_NODE) {
+      const element = sibling as Element;
+
+      if (element.classList.contains('bioheading')) {
+        break;
+      }
+
+      if (['corrections', 'persontitlead'].includes(element.id)) {
+        break;
+      }
+
+      const anchors = element.matches('a')
+        ? [element as HTMLAnchorElement]
+        : Array.from(element.querySelectorAll('a'));
+
+      for (const anchor of anchors) {
+        const label = cleanValue(anchor.textContent);
+        const url = anchor.href;
+
+        if (label && url) {
+          links.push({ label, url });
+        }
+      }
+    }
+
+    sibling = sibling.nextSibling;
+  }
+
+  return links.length > 0 ? links : undefined;
+}
+
+function extractMovieCreditsFromDocument(
+  document: Document,
+): readonly { title: string; year: number; distributor: string; notes?: string }[] | undefined {
+  const rows = Array.from(document.querySelectorAll('#personal tbody tr'));
+
+  type RawCredit = {
+    title?: string;
+    year: number;
+    distributor: string;
+    notes?: string;
+  };
+
+  const credits = rows
+    .map((row) => {
+      const cells = Array.from(row.querySelectorAll('td'));
+      return {
+        title: cleanValue(cells[0]?.textContent),
+        year: Number(cleanValue(cells[1]?.textContent)),
+        distributor: cleanValue(cells[2]?.textContent) ?? '',
+        notes: cleanValue(cells[3]?.textContent),
+      } as RawCredit;
+    })
+    .filter(
+      (credit): credit is { title: string; year: number; distributor: string; notes?: string } =>
+        Boolean(credit.title) && Number.isFinite(credit.year),
+    );
+
+  return credits.length > 0 ? credits : undefined;
+}
+
 function cleanMultilineValue(value: string): string | undefined {
   const lines = value
     .replace(/\u00a0/g, ' ')
@@ -212,83 +292,10 @@ function cleanValue(value: string | undefined): string | undefined {
 }
 
 function isIafdProfilePage(html: string): boolean {
-  if (isReaderProxyMarkdown(html)) {
-    return /URL Source:\s*https?:\/\/(?:www\.)?iafd\.com\/person\.rme\//i.test(html);
-  }
-
   return (
     html.includes('<link rel="canonical" href="https://www.iafd.com/person.rme/') ||
     (html.includes('id="headshot"') && html.includes('Performer Credits'))
   );
-}
-
-function isReaderProxyMarkdown(content: string): boolean {
-  return content.includes('Markdown Content:') && content.includes('URL Source:');
-}
-
-function extractNameFromMarkdown(content: string): string | undefined {
-  const headingMatch = content.match(/^#\s+(.+?)\s+-\s+iafd\.com\s*$/im);
-
-  return cleanValue(headingMatch?.[1]);
-}
-
-function collectBioFieldsFromMarkdown(content: string): Map<string, string> {
-  const fields = new Map<string, string>();
-  const markdown = content.split('Markdown Content:')[1] ?? content;
-  const lines = markdown.split(/\r?\n/);
-  let currentLabel: string | undefined;
-  let currentValues: string[] = [];
-
-  const flushField = (): void => {
-    if (!currentLabel) {
-      return;
-    }
-
-    const value = cleanMultilineValue(currentValues.join('\n'));
-
-    if (value) {
-      fields.set(currentLabel, value);
-    }
-
-    currentLabel = undefined;
-    currentValues = [];
-  };
-
-  for (const line of lines) {
-    const boldMatch = line.match(/^\*\*([^:*]+)\*\*\s*:?\s*(.*)$/);
-    const plainMatch = line.match(/^([A-Za-z][A-Za-z ]{2,}):\s*(.*)$/);
-    const match = boldMatch ?? plainMatch;
-
-    if (match) {
-      flushField();
-      currentLabel = normalizeText(match[1]);
-      const initialValue = cleanValue(match[2]);
-
-      if (initialValue) {
-        currentValues.push(initialValue);
-      }
-
-      continue;
-    }
-
-    if (!currentLabel) {
-      continue;
-    }
-
-    const listItemValue = cleanValue(line.replace(/^\s*[*-]\s+/, ''));
-
-    if (listItemValue) {
-      currentValues.push(listItemValue);
-      continue;
-    }
-
-    if (!line.trim()) {
-      flushField();
-    }
-  }
-
-  flushField();
-  return fields;
 }
 
 function removeEmptyValues<T extends object>(value: T): T {

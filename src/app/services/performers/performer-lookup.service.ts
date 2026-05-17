@@ -1,12 +1,14 @@
 import { computed, inject, Injectable, signal } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { Observable, tap } from 'rxjs';
+import { Observable, of, switchMap, tap, catchError, map } from 'rxjs';
 
-import { CatalogEntitySummary, PerformerProfile } from '../../models';
+import { CatalogEntitySummary, PerformerDataLink, PerformerProfile } from '../../models';
+import { BraveSearchService } from '../brave-search/brave-search.service';
 import { IafdProfileService } from '../iafd/iafd-profile.service';
 
 const customPerformersStorageKey = 'performer-catalog.custom-performers';
 const hiddenPerformerIdsStorageKey = 'performer-catalog.hidden-performer-ids';
+const selectedPerformerIdStorageKey = 'performer-catalog.selected-performer-id';
 
 @Injectable({
   providedIn: 'root',
@@ -14,6 +16,7 @@ const hiddenPerformerIdsStorageKey = 'performer-catalog.hidden-performer-ids';
 export class PerformerLookupService {
   private readonly http = inject(HttpClient);
   private readonly iafdProfile = inject(IafdProfileService);
+  private readonly braveSearch = inject(BraveSearchService);
   private readonly generatedPerformers = signal<readonly CatalogEntitySummary[]>([]);
   private readonly customPerformers = signal<readonly CatalogEntitySummary[]>(
     this.readCustomPerformers(),
@@ -22,7 +25,7 @@ export class PerformerLookupService {
     this.readHiddenGeneratedPerformerIds(),
   );
   private readonly selectedProfileState = signal<PerformerProfile | undefined>(undefined);
-  private readonly selectedId = signal<string | undefined>(undefined);
+  private readonly selectedId = signal<string | undefined>(this.readSelectedPerformerId());
 
   readonly searchTerm = signal('');
   readonly selectedProfile = this.selectedProfileState.asReadonly();
@@ -32,7 +35,19 @@ export class PerformerLookupService {
     const generatedPerformers = this.generatedPerformers().filter(
       (performer) => !hiddenIds.has(performer.id),
     );
-    const performers = [...generatedPerformers, ...this.customPerformers()].sort((first, second) =>
+    const uniquePerformers = new Map<string, PerformerSearchResult>();
+
+    for (const performer of generatedPerformers) {
+      uniquePerformers.set(performer.id, performer);
+    }
+
+    for (const performer of this.customPerformers()) {
+      if (!uniquePerformers.has(performer.id)) {
+        uniquePerformers.set(performer.id, performer);
+      }
+    }
+
+    const performers = [...uniquePerformers.values()].sort((first, second) =>
       first.name.localeCompare(second.name),
     );
 
@@ -60,9 +75,17 @@ export class PerformerLookupService {
 
   constructor() {
     this.http.get<readonly CatalogEntitySummary[]>('data/performers.index.json').subscribe({
-      next: (performers) => this.generatedPerformers.set(performers),
-      error: () => this.generatedPerformers.set([]),
+      next: (performers) => {
+        this.generatedPerformers.set(performers);
+        this.restoreSelectionIfNeeded();
+      },
+      error: () => {
+        this.generatedPerformers.set([]);
+        this.restoreSelectionIfNeeded();
+      },
     });
+
+    this.restoreSelectionIfNeeded();
   }
 
   updateSearchTerm(value: string): void {
@@ -72,13 +95,31 @@ export class PerformerLookupService {
   addPerformer(name: string): CatalogEntitySummary | undefined {
     const trimmedName = name.trim();
     const displayName = capitalizeWords(trimmedName);
+    const performerId = createEntityId(displayName);
 
     if (!displayName) {
       return undefined;
     }
 
-    const existing = [...this.generatedPerformers(), ...this.customPerformers()].some(
-      (performer) => performer.name.toLowerCase() === displayName.toLowerCase(),
+    const generatedPerformers = this.generatedPerformers();
+    const customPerformers = this.customPerformers();
+    const hiddenIds = this.hiddenGeneratedPerformerIds();
+
+    const hiddenGeneratedMatch = generatedPerformers.find(
+      (performer) => performer.id === performerId && hiddenIds.includes(performer.id),
+    );
+
+    if (hiddenGeneratedMatch) {
+      const nextHiddenIds = hiddenIds.filter((id) => id !== hiddenGeneratedMatch.id);
+      this.hiddenGeneratedPerformerIds.set(nextHiddenIds);
+      localStorage.setItem(hiddenPerformerIdsStorageKey, JSON.stringify(nextHiddenIds));
+      this.selectPerformer(hiddenGeneratedMatch);
+      return hiddenGeneratedMatch;
+    }
+
+    const existing = [...generatedPerformers, ...customPerformers].some(
+      (performer) =>
+        performer.id === performerId || performer.name.toLowerCase() === displayName.toLowerCase(),
     );
 
     if (existing) {
@@ -86,47 +127,51 @@ export class PerformerLookupService {
     }
 
     const performer: CatalogEntitySummary = {
-      id: createEntityId(displayName),
+      id: performerId,
       name: displayName,
       completed: false,
       type: 'performer',
       profilePath: '',
     };
-    const customPerformers = [...this.customPerformers(), performer].sort((first, second) =>
+    const nextCustomPerformers = [...customPerformers, performer].sort((first, second) =>
       first.name.localeCompare(second.name),
     );
 
-    this.customPerformers.set(customPerformers);
-    localStorage.setItem(customPerformersStorageKey, JSON.stringify(customPerformers));
+    this.customPerformers.set(nextCustomPerformers);
+    localStorage.setItem(customPerformersStorageKey, JSON.stringify(nextCustomPerformers));
     this.selectPerformer(performer);
 
     return performer;
   }
 
   removePerformer(summary: CatalogEntitySummary): void {
-    const customPerformers = this.customPerformers();
-    const isCustomPerformer = customPerformers.some((performer) => performer.id === summary.id);
+    const updatedCustomPerformers = this.customPerformers().filter(
+      (performer) => performer.id !== summary.id,
+    );
+    this.customPerformers.set(updatedCustomPerformers);
+    localStorage.setItem(customPerformersStorageKey, JSON.stringify(updatedCustomPerformers));
 
-    if (isCustomPerformer) {
-      const updatedCustomPerformers = customPerformers.filter(
-        (performer) => performer.id !== summary.id,
-      );
-      this.customPerformers.set(updatedCustomPerformers);
-      localStorage.setItem(customPerformersStorageKey, JSON.stringify(updatedCustomPerformers));
-    } else {
-      const hiddenIds = [...new Set([...this.hiddenGeneratedPerformerIds(), summary.id])];
-      this.hiddenGeneratedPerformerIds.set(hiddenIds);
-      localStorage.setItem(hiddenPerformerIdsStorageKey, JSON.stringify(hiddenIds));
-    }
+    const updatedGeneratedPerformers = this.generatedPerformers().filter(
+      (performer) => performer.id !== summary.id,
+    );
+    this.generatedPerformers.set(updatedGeneratedPerformers);
+
+    const updatedHiddenIds = this.hiddenGeneratedPerformerIds().filter((id) => id !== summary.id);
+    this.hiddenGeneratedPerformerIds.set(updatedHiddenIds);
+    localStorage.setItem(hiddenPerformerIdsStorageKey, JSON.stringify(updatedHiddenIds));
 
     if (this.selectedId() === summary.id) {
       this.selectedId.set(undefined);
       this.selectedProfileState.set(undefined);
+      sessionStorage.removeItem(selectedPerformerIdStorageKey);
     }
+
+    this.deletePerformerProfile(summary.id).subscribe();
   }
 
   selectPerformer(summary: CatalogEntitySummary): void {
     this.selectedId.set(summary.id);
+    sessionStorage.setItem(selectedPerformerIdStorageKey, summary.id);
 
     if (!summary.profilePath) {
       this.selectedProfileState.set({
@@ -155,11 +200,86 @@ export class PerformerLookupService {
     iafdUrl: string,
   ): Observable<PerformerProfile> {
     return this.iafdProfile.fetchProfileForPerformer(summary, iafdUrl).pipe(
-      tap((profile) => {
-        this.selectedId.set(summary.id);
-        this.selectedProfileState.set(profile);
-      }),
+      switchMap((profile) =>
+        this.braveSearch.fetchModelDataLinks(profile.name).pipe(
+          map((secondaryLinks) => ({
+            ...profile,
+            dataLinks: mergeDataLinks(profile.dataLinks, secondaryLinks),
+          })),
+        ),
+      ),
+      switchMap((profile) =>
+        this.savePerformerProfile(profile).pipe(
+          tap((savedSummary) => this.upsertPerformerSummary(savedSummary)),
+          tap(() => {
+            this.selectedId.set(profile.id);
+            this.selectedProfileState.set(profile);
+          }),
+          map(() => profile),
+        ),
+      ),
     );
+  }
+
+  private savePerformerProfile(
+    profile: PerformerProfile,
+  ): Observable<CatalogEntitySummary> {
+    return this.http
+      .post<{ summary?: CatalogEntitySummary }>('http://localhost:3789/performers/save', { profile })
+      .pipe(
+        map((response) => {
+          if (!response.summary) {
+            throw new Error('Performer was fetched but could not be saved to disk.');
+          }
+
+          return response.summary;
+        }),
+      );
+  }
+
+  private deletePerformerProfile(performerId: string): Observable<boolean> {
+    return this.http
+      .delete(`http://localhost:3789/performers/${encodeURIComponent(performerId)}`)
+      .pipe(
+        map(() => true),
+        catchError(() => of(false)),
+      );
+  }
+
+  private upsertPerformerSummary(summary: CatalogEntitySummary): void {
+    const profilePath = summary.profilePath || `data/performers/${summary.id}.json`;
+    const normalizedSummary = { ...summary, profilePath };
+    const customPerformers = this.customPerformers();
+    const generatedPerformers = this.generatedPerformers();
+    const customMatch = customPerformers.some((performer) => performer.id === summary.id);
+    const generatedMatch = generatedPerformers.some((performer) => performer.id === summary.id);
+
+    if (customMatch) {
+      const nextCustomPerformers = customPerformers
+        .map((performer) => (performer.id === summary.id ? normalizedSummary : performer))
+        .sort((first, second) => first.name.localeCompare(second.name));
+      this.customPerformers.set(nextCustomPerformers);
+      localStorage.setItem(customPerformersStorageKey, JSON.stringify(nextCustomPerformers));
+      return;
+    }
+
+    if (generatedMatch) {
+      const nextGeneratedPerformers = generatedPerformers
+        .map((performer) => (performer.id === summary.id ? normalizedSummary : performer))
+        .sort((first, second) => first.name.localeCompare(second.name));
+      this.generatedPerformers.set(nextGeneratedPerformers);
+
+      const nextCustomPerformers = customPerformers.filter((performer) => performer.id !== summary.id);
+      this.customPerformers.set(nextCustomPerformers);
+      localStorage.setItem(customPerformersStorageKey, JSON.stringify(nextCustomPerformers));
+      return;
+    }
+
+    const nextCustomPerformers = [...customPerformers, normalizedSummary].sort((first, second) =>
+      first.name.localeCompare(second.name),
+    );
+    this.customPerformers.set(nextCustomPerformers);
+    localStorage.setItem(customPerformersStorageKey, JSON.stringify(nextCustomPerformers));
   }
 
   private readCustomPerformers(): readonly CatalogEntitySummary[] {
@@ -183,6 +303,31 @@ export class PerformerLookupService {
       return [];
     }
   }
+
+  private readSelectedPerformerId(): string | undefined {
+    try {
+      const value = sessionStorage.getItem(selectedPerformerIdStorageKey);
+      return value?.trim() || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private restoreSelectionIfNeeded(): void {
+    const selectedId = this.selectedId();
+
+    if (!selectedId || this.selectedProfileState()) {
+      return;
+    }
+
+    const summary = [...this.generatedPerformers(), ...this.customPerformers()].find(
+      (performer) => performer.id === selectedId,
+    );
+
+    if (summary) {
+      this.selectPerformer(summary);
+    }
+  }
 }
 
 export interface PerformerSearchResult extends CatalogEntitySummary {
@@ -204,4 +349,19 @@ function capitalizeWords(value: string): string {
     .split(/\s+/)
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
     .join(' ');
+}
+
+function mergeDataLinks(
+  ...groups: ReadonlyArray<readonly PerformerDataLink[] | undefined>
+): readonly PerformerDataLink[] | undefined {
+  const links = groups.flat().filter((item) => item !== undefined);
+
+  if (links.length === 0) {
+    return undefined;
+  }
+
+  return links.filter(
+    (link, index, candidates) =>
+      candidates.findIndex((candidate) => candidate.url === link.url) === index,
+  );
 }
