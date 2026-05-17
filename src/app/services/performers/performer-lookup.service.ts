@@ -145,28 +145,32 @@ export class PerformerLookupService {
   }
 
   removePerformer(summary: CatalogEntitySummary): void {
-    const updatedCustomPerformers = this.customPerformers().filter(
-      (performer) => performer.id !== summary.id,
-    );
-    this.customPerformers.set(updatedCustomPerformers);
-    localStorage.setItem(customPerformersStorageKey, JSON.stringify(updatedCustomPerformers));
+    this.deletePerformerProfile(summary.id).subscribe((didDelete) => {
+      if (!didDelete) {
+        return;
+      }
 
-    const updatedGeneratedPerformers = this.generatedPerformers().filter(
-      (performer) => performer.id !== summary.id,
-    );
-    this.generatedPerformers.set(updatedGeneratedPerformers);
+      const updatedCustomPerformers = this.customPerformers().filter(
+        (performer) => performer.id !== summary.id,
+      );
+      this.customPerformers.set(updatedCustomPerformers);
+      localStorage.setItem(customPerformersStorageKey, JSON.stringify(updatedCustomPerformers));
 
-    const updatedHiddenIds = this.hiddenGeneratedPerformerIds().filter((id) => id !== summary.id);
-    this.hiddenGeneratedPerformerIds.set(updatedHiddenIds);
-    localStorage.setItem(hiddenPerformerIdsStorageKey, JSON.stringify(updatedHiddenIds));
+      const updatedGeneratedPerformers = this.generatedPerformers().filter(
+        (performer) => performer.id !== summary.id,
+      );
+      this.generatedPerformers.set(updatedGeneratedPerformers);
 
-    if (this.selectedId() === summary.id) {
-      this.selectedId.set(undefined);
-      this.selectedProfileState.set(undefined);
-      sessionStorage.removeItem(selectedPerformerIdStorageKey);
-    }
+      const updatedHiddenIds = this.hiddenGeneratedPerformerIds().filter((id) => id !== summary.id);
+      this.hiddenGeneratedPerformerIds.set(updatedHiddenIds);
+      localStorage.setItem(hiddenPerformerIdsStorageKey, JSON.stringify(updatedHiddenIds));
 
-    this.deletePerformerProfile(summary.id).subscribe();
+      if (this.selectedId() === summary.id) {
+        this.selectedId.set(undefined);
+        this.selectedProfileState.set(undefined);
+        sessionStorage.removeItem(selectedPerformerIdStorageKey);
+      }
+    });
   }
 
   selectPerformer(summary: CatalogEntitySummary): void {
