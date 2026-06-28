@@ -1,12 +1,18 @@
 import { computed, inject, Injectable, signal } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { Observable, of, switchMap, tap, catchError, map } from 'rxjs';
+import { Observable, of, switchMap, tap, catchError, map, forkJoin } from 'rxjs';
 
-import { CatalogEntitySummary, PerformerDataLink, PerformerProfile } from '../../models';
+import {
+  CatalogEntitySummary,
+  PerformerDataLink,
+  PerformerProfile,
+  StudioProfile,
+} from '../../models';
 import { BraveSearchService } from '../brave-search/brave-search.service';
 import { IafdProfileService } from '../iafd/iafd-profile.service';
 import {
   CUSTOM_PERFORMERS_STORAGE_KEY,
+  CUSTOM_STUDIOS_STORAGE_KEY,
   HIDDEN_PERFORMER_IDS_STORAGE_KEY,
   SELECTED_PERFORMER_ID_STORAGE_KEY,
   SessionFileAccessService,
@@ -28,6 +34,7 @@ export class PerformerLookupService {
   private readonly customPerformers = signal<readonly CatalogEntitySummary[]>(
     this.readCustomPerformers(),
   );
+  private readonly customStudios = signal<readonly StudioProfile[]>(this.readCustomStudios());
   private readonly hiddenGeneratedPerformerIds = signal<readonly string[]>(
     this.readHiddenGeneratedPerformerIds(),
   );
@@ -86,6 +93,8 @@ export class PerformerLookupService {
   readonly selectedPerformerId = this.selectedId.asReadonly();
 
   constructor() {
+    this.migrateLegacyStudiosFromCustomPerformers();
+
     this.http.get<readonly CatalogEntitySummary[]>('data/performers.index.json').subscribe({
       next: (performers) => {
         this.generatedPerformers.set(performers);
@@ -97,6 +106,7 @@ export class PerformerLookupService {
       },
     });
 
+    this.loadStudioProfilesIntoLocalStorage();
     this.restoreSelectionIfNeeded();
   }
 
@@ -106,6 +116,12 @@ export class PerformerLookupService {
 
   addPerformer(name: string): CatalogEntitySummary | undefined {
     const trimmedName = name.trim();
+    const studioName = extractStudioName(trimmedName);
+
+    if (studioName) {
+      return this.addStudio(studioName);
+    }
+
     const displayName = capitalizeWords(trimmedName);
     const performerId = createEntityId(displayName);
 
@@ -392,7 +408,28 @@ export class PerformerLookupService {
           performer.type === 'performer' &&
           typeof performer.id === 'string' &&
           typeof performer.name === 'string' &&
-          performer.name.trim().length > 0,
+          performer.name.trim().length > 0 &&
+          !isStudioSummary(performer),
+      );
+    } catch {
+      return [];
+    }
+  }
+
+  private readCustomStudios(): readonly StudioProfile[] {
+    try {
+      const storedStudios = localStorage.getItem(CUSTOM_STUDIOS_STORAGE_KEY);
+      const studios = storedStudios ? (JSON.parse(storedStudios) as readonly StudioProfile[]) : [];
+      const legacyPerformers = localStorage.getItem(CUSTOM_PERFORMERS_STORAGE_KEY);
+      const legacyEntries = legacyPerformers
+        ? (JSON.parse(legacyPerformers) as readonly CatalogEntitySummary[])
+        : [];
+
+      return mergeStudioProfiles(
+        studios.map(normalizeStoredStudioProfile).filter((studio) => studio !== undefined),
+        legacyEntries
+          .map((entry) => createStudioProfileFromLegacyPerformer(entry))
+          .filter((studio) => studio !== undefined),
       );
     } catch {
       return [];
@@ -453,6 +490,98 @@ export class PerformerLookupService {
     }
   }
 
+  private addStudio(name: string): CatalogEntitySummary | undefined {
+    const displayName = capitalizeWords(name);
+
+    if (!displayName) {
+      return undefined;
+    }
+
+    const studioProfile = createStudioProfile(displayName);
+    const alreadyExists = this.customStudios().some(
+      (studio) =>
+        studio.id === studioProfile.id ||
+        studio.name.toLowerCase() === studioProfile.name.toLowerCase() ||
+        studio.searchName?.toLowerCase() === studioProfile.searchName?.toLowerCase(),
+    );
+
+    if (alreadyExists) {
+      return undefined;
+    }
+
+    const nextStudios = mergeStudioProfiles(this.customStudios(), [studioProfile]);
+    this.customStudios.set(nextStudios);
+    this.setLocalStorageItem(CUSTOM_STUDIOS_STORAGE_KEY, JSON.stringify(nextStudios));
+
+    return undefined;
+  }
+
+  private migrateLegacyStudiosFromCustomPerformers(): void {
+    try {
+      const value = localStorage.getItem(CUSTOM_PERFORMERS_STORAGE_KEY);
+      const performers = value ? (JSON.parse(value) as readonly CatalogEntitySummary[]) : [];
+      const nextPerformers = performers.filter(
+        (performer) =>
+          performer.type === 'performer' &&
+          typeof performer.id === 'string' &&
+          typeof performer.name === 'string' &&
+          performer.name.trim().length > 0 &&
+          !isStudioSummary(performer),
+      );
+      const migratedStudios = performers
+        .map((performer) => createStudioProfileFromLegacyPerformer(performer))
+        .filter((studio) => studio !== undefined);
+
+      if (migratedStudios.length === 0 && nextPerformers.length === performers.length) {
+        return;
+      }
+
+      this.customPerformers.set(nextPerformers);
+      this.setLocalStorageItem(CUSTOM_PERFORMERS_STORAGE_KEY, JSON.stringify(nextPerformers));
+
+      if (migratedStudios.length === 0) {
+        return;
+      }
+
+      const nextStudios = mergeStudioProfiles(this.customStudios(), migratedStudios);
+      this.customStudios.set(nextStudios);
+      this.setLocalStorageItem(CUSTOM_STUDIOS_STORAGE_KEY, JSON.stringify(nextStudios));
+    } catch {
+      // Ignore malformed local storage and let the individual readers fall back to empty state.
+    }
+  }
+
+  private loadStudioProfilesIntoLocalStorage(): void {
+    this.http
+      .get<readonly CatalogEntitySummary[]>('data/studios.index.json')
+      .pipe(
+        switchMap((studios) => {
+          if (studios.length === 0) {
+            return of([] as readonly StudioProfile[]);
+          }
+
+          return forkJoin(
+            studios.map((studio) =>
+              this.http.get<StudioProfile>(studio.profilePath).pipe(
+                map((profile) => normalizeFetchedStudioProfile(profile, studio)),
+                catchError(() => of(createStudioProfileFromSummary(studio))),
+              ),
+            ),
+          );
+        }),
+        catchError(() => of([] as readonly StudioProfile[])),
+      )
+      .subscribe((studios) => {
+        if (studios.length === 0) {
+          return;
+        }
+
+        const nextStudios = mergeStudioProfiles(this.customStudios(), studios);
+        this.customStudios.set(nextStudios);
+        this.setLocalStorageItem(CUSTOM_STUDIOS_STORAGE_KEY, JSON.stringify(nextStudios));
+      });
+  }
+
   private setLocalStorageItem(key: string, value: string): void {
     localStorage.setItem(key, value);
     this.sessionFileAccess.syncSessionToDisk();
@@ -502,5 +631,126 @@ function mergeDataLinks(
   return links.filter(
     (link, index, candidates) =>
       candidates.findIndex((candidate) => candidate.url === link.url) === index,
+  );
+}
+
+function extractStudioName(value: string): string | undefined {
+  if (!/\(\s*studio\s*\)/i.test(value)) {
+    return undefined;
+  }
+
+  const normalized = value.replace(/\(\s*studio\s*\)/gi, ' ').replace(/\s+/g, ' ').trim();
+  return normalized || undefined;
+}
+
+function createStudioProfile(name: string): StudioProfile {
+  const normalizedName = capitalizeWords(name);
+  const id = createEntityId(normalizedName);
+
+  return {
+    id,
+    name: normalizedName,
+    searchName: normalizedName,
+    completed: false,
+    type: 'studio',
+    profilePath: `data/studios/${id}.json`,
+  };
+}
+
+function createStudioProfileFromSummary(summary: CatalogEntitySummary): StudioProfile {
+  const normalizedName = extractStudioName(summary.searchName ?? summary.name) ?? summary.name;
+  const profile = createStudioProfile(normalizedName);
+
+  return {
+    ...profile,
+    completed: summary.completed,
+    noInfoFound: summary.noInfoFound,
+    profilePath: summary.profilePath || profile.profilePath,
+  };
+}
+
+function createStudioProfileFromLegacyPerformer(
+  summary: CatalogEntitySummary,
+): StudioProfile | undefined {
+  if (!isStudioSummary(summary)) {
+    return undefined;
+  }
+
+  const studioName = getStudioSummaryName(summary);
+
+  if (!studioName) {
+    return undefined;
+  }
+
+  return {
+    ...createStudioProfile(studioName),
+    completed: summary.completed,
+    noInfoFound: summary.noInfoFound,
+  };
+}
+
+function normalizeStoredStudioProfile(profile: StudioProfile): StudioProfile | undefined {
+  if (
+    profile.type !== 'studio' ||
+    typeof profile.id !== 'string' ||
+    typeof profile.name !== 'string' ||
+    profile.name.trim().length === 0
+  ) {
+    return undefined;
+  }
+
+  return {
+    ...createStudioProfile(profile.name),
+    completed: Boolean(profile.completed),
+    noInfoFound: profile.noInfoFound,
+    dataLinks: profile.dataLinks,
+    profilePath: profile.profilePath || `data/studios/${profile.id}.json`,
+  };
+}
+
+function normalizeFetchedStudioProfile(
+  profile: StudioProfile,
+  summary: CatalogEntitySummary,
+): StudioProfile {
+  const normalizedName = getStudioSummaryName(profile) ?? getStudioSummaryName(summary) ?? profile.name;
+  const baseProfile = createStudioProfile(normalizedName);
+
+  return {
+    ...baseProfile,
+    completed: Boolean(profile.completed ?? summary.completed),
+    noInfoFound: profile.noInfoFound ?? summary.noInfoFound,
+    dataLinks: mergeDataLinks(profile.dataLinks),
+    profilePath: profile.profilePath || summary.profilePath || baseProfile.profilePath,
+  };
+}
+
+function mergeStudioProfiles(
+  ...groups: ReadonlyArray<readonly StudioProfile[]>
+): readonly StudioProfile[] {
+  const studiosById = new Map<string, StudioProfile>();
+
+  for (const studio of groups.flat()) {
+    studiosById.set(studio.id, studio);
+  }
+
+  return [...studiosById.values()].sort((first, second) => first.name.localeCompare(second.name));
+}
+
+function isStudioSummary(summary: Pick<CatalogEntitySummary, 'type' | 'name' | 'searchName' | 'profilePath'>): boolean {
+  return (
+    summary.type === 'studio' ||
+    extractStudioName(summary.name) !== undefined ||
+    extractStudioName(summary.searchName ?? '') !== undefined ||
+    summary.profilePath.includes('data/studios/')
+  );
+}
+
+function getStudioSummaryName(
+  summary: Pick<CatalogEntitySummary, 'name' | 'searchName' | 'profilePath'>,
+): string | undefined {
+  return (
+    extractStudioName(summary.searchName ?? '') ??
+    extractStudioName(summary.name) ??
+    (summary.profilePath.includes('data/studios/') ? summary.name.trim() || undefined : undefined)
   );
 }

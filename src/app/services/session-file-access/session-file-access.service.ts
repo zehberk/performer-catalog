@@ -1,6 +1,7 @@
 import { Injectable, signal } from '@angular/core';
 
 export const CUSTOM_PERFORMERS_STORAGE_KEY = 'performer-catalog.custom-performers';
+export const CUSTOM_STUDIOS_STORAGE_KEY = 'performer-catalog.custom-studios';
 export const HIDDEN_PERFORMER_IDS_STORAGE_KEY = 'performer-catalog.hidden-performer-ids';
 export const SELECTED_PERFORMER_ID_STORAGE_KEY = 'performer-catalog.selected-performer-id';
 export const DEBUG_LOGS_STORAGE_KEY = 'performer-catalog.missing-lookup-debug-logs';
@@ -9,6 +10,7 @@ export const SESSION_FILE_DEBUG_LOGS_STORAGE_KEY = 'performer-catalog.session-fi
 
 const trackedLocalStorageKeys = [
   CUSTOM_PERFORMERS_STORAGE_KEY,
+  CUSTOM_STUDIOS_STORAGE_KEY,
   HIDDEN_PERFORMER_IDS_STORAGE_KEY,
   SESSION_FILE_DEBUG_LOGS_STORAGE_KEY,
 ] as const;
