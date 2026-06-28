@@ -1,22 +1,92 @@
 :host {
   display: block;
   height: 100%;
-  overflow: hidden;
+  overflow: auto;
   color: #202124;
   background: #f6f8fb;
   font-family: Arial, Helvetica, sans-serif;
 }
 
 .app-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
   height: 100%;
+  min-height: 0;
   padding: 1rem;
   box-sizing: border-box;
 }
 
+.file-access-banner {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  box-sizing: border-box;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  min-height: 2rem;
+  padding: 0.5rem 0.85rem;
+  background: #cfe5ff;
+  color: #123b73;
+}
+
+.file-access-banner-success {
+  background: #d8f2df;
+  color: #195934;
+  animation: file-access-banner-fade-out 1.5s ease forwards;
+}
+
+.file-access-banner-content {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 0.85rem;
+  width: 100%;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.file-access-banner-message {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.2;
+  color: inherit;
+  text-align: center;
+}
+
+.file-access-banner-actions {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.file-access-banner-button {
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  font-size: 0.75rem;
+  line-height: 1.1;
+  font-weight: 700;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.file-access-banner-button-secondary {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
 .catalog-layout {
-  height: calc(100% - 2rem);
+  flex: 1 1 auto;
   min-height: 0;
-  margin-bottom: 1rem;
   display: grid;
   grid-template-columns: minmax(18rem, 24rem) minmax(0, 1fr);
   gap: 1rem;
@@ -87,5 +157,24 @@
 
   .detail-debug-column {
     grid-template-rows: auto auto;
+  }
+
+  .file-access-banner {
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+  }
+}
+
+@keyframes file-access-banner-fade-out {
+  from {
+    opacity: 1;
+  }
+
+  80% {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
   }
 }

@@ -1,4 +1,42 @@
 <main class="app-shell">
+  @if (showFileAccessBanner()) {
+    <section
+      class="file-access-banner"
+      [class.file-access-banner-success]="fileAccessBannerState() === 'success'"
+      aria-label="Session file access prompt"
+    >
+      <div class="file-access-banner-content">
+        @if (fileAccessBannerState() === 'success') {
+          <p class="file-access-banner-message">
+            Session file saved to <strong>{{ sessionFileName() ?? 'the selected file' }}</strong>.
+          </p>
+        } @else {
+          <p class="file-access-banner-message">Allow saving local session data to disk?</p>
+
+          <div class="file-access-banner-actions">
+            <button
+              type="button"
+              class="file-access-banner-button file-access-banner-button-secondary"
+              [disabled]="sessionFileAccessBusy()"
+              (click)="requestSessionFileAccess()"
+            >
+              Yes
+            </button>
+
+            <button
+              type="button"
+              class="file-access-banner-button file-access-banner-button-secondary"
+              [disabled]="sessionFileAccessBusy()"
+              (click)="dismissSessionFileAccessBanner()"
+            >
+              No
+            </button>
+          </div>
+        }
+      </div>
+    </section>
+  }
+
   <section class="catalog-layout" aria-label="Performer catalog">
     <aside class="sidebar-column" aria-label="Performer lookup and list">
       <app-performer-lookup-section

@@ -92,6 +92,12 @@ button {
   font: inherit;
 }
 
+.add-button[disabled],
+.missing-button[disabled] {
+  cursor: wait;
+  opacity: 0.7;
+}
+
 input:focus-visible,
 button:focus-visible {
   outline: 3px solid #193a7a;

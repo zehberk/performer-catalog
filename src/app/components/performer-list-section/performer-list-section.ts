@@ -14,6 +14,10 @@ import {
 import { CatalogEntitySummary } from '../../models';
 import { PerformerSearchResult } from '../../services/performers/performer-lookup.service';
 import {
+  LIST_SCROLL_TOP_STORAGE_KEY,
+  SessionFileAccessService,
+} from '../../services/session-file-access/session-file-access.service';
+import {
   ContextMenuAction,
   PerformerContextMenuComponent,
 } from '../performer-context-menu/performer-context-menu';
@@ -26,11 +30,11 @@ import {
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class PerformerListSectionComponent {
-  private static readonly listScrollTopStorageKey = 'performer-catalog.list-scroll-top';
   private readonly removeActionId = 'remove-performer';
   private readonly fetchPerformerInfo = 'fetch-performer-info';
   private readonly hostElement = inject(ElementRef<HTMLElement>);
   private readonly destroyRef = inject(DestroyRef);
+  private readonly sessionFileAccess = inject(SessionFileAccessService);
   private previousSelectedPerformerId: string | undefined;
   private previousSelectionRenderKey: string | undefined;
   private readonly onListScroll = (event: Event): void => {
@@ -40,10 +44,8 @@ export class PerformerListSectionComponent {
       return;
     }
 
-    sessionStorage.setItem(
-      PerformerListSectionComponent.listScrollTopStorageKey,
-      String(target.scrollTop),
-    );
+    sessionStorage.setItem(LIST_SCROLL_TOP_STORAGE_KEY, String(target.scrollTop));
+    this.sessionFileAccess.syncSessionToDisk();
   };
   readonly performers = input.required<readonly PerformerSearchResult[]>();
   readonly selectedPerformerId = input<string | undefined>(undefined);
@@ -65,7 +67,7 @@ export class PerformerListSectionComponent {
       }
 
       const storedScrollTop = Number.parseInt(
-        sessionStorage.getItem(PerformerListSectionComponent.listScrollTopStorageKey) ?? '',
+        sessionStorage.getItem(LIST_SCROLL_TOP_STORAGE_KEY) ?? '',
         10,
       );
 

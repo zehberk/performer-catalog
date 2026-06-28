@@ -5,10 +5,12 @@ import { Observable, of, switchMap, tap, catchError, map } from 'rxjs';
 import { CatalogEntitySummary, PerformerDataLink, PerformerProfile } from '../../models';
 import { BraveSearchService } from '../brave-search/brave-search.service';
 import { IafdProfileService } from '../iafd/iafd-profile.service';
-
-const customPerformersStorageKey = 'performer-catalog.custom-performers';
-const hiddenPerformerIdsStorageKey = 'performer-catalog.hidden-performer-ids';
-const selectedPerformerIdStorageKey = 'performer-catalog.selected-performer-id';
+import {
+  CUSTOM_PERFORMERS_STORAGE_KEY,
+  HIDDEN_PERFORMER_IDS_STORAGE_KEY,
+  SELECTED_PERFORMER_ID_STORAGE_KEY,
+  SessionFileAccessService,
+} from '../session-file-access/session-file-access.service';
 export interface MissingLookupResponse {
   readonly summaries?: readonly CatalogEntitySummary[];
   readonly debugLogs?: readonly string[];
@@ -21,6 +23,7 @@ export class PerformerLookupService {
   private readonly http = inject(HttpClient);
   private readonly iafdProfile = inject(IafdProfileService);
   private readonly braveSearch = inject(BraveSearchService);
+  private readonly sessionFileAccess = inject(SessionFileAccessService);
   private readonly generatedPerformers = signal<readonly CatalogEntitySummary[]>([]);
   private readonly customPerformers = signal<readonly CatalogEntitySummary[]>(
     this.readCustomPerformers(),
@@ -121,7 +124,7 @@ export class PerformerLookupService {
     if (hiddenGeneratedMatch) {
       const nextHiddenIds = hiddenIds.filter((id) => id !== hiddenGeneratedMatch.id);
       this.hiddenGeneratedPerformerIds.set(nextHiddenIds);
-      localStorage.setItem(hiddenPerformerIdsStorageKey, JSON.stringify(nextHiddenIds));
+      this.setLocalStorageItem(HIDDEN_PERFORMER_IDS_STORAGE_KEY, JSON.stringify(nextHiddenIds));
       this.selectPerformer(hiddenGeneratedMatch);
       return hiddenGeneratedMatch;
     }
@@ -147,7 +150,7 @@ export class PerformerLookupService {
     );
 
     this.customPerformers.set(nextCustomPerformers);
-    localStorage.setItem(customPerformersStorageKey, JSON.stringify(nextCustomPerformers));
+    this.setLocalStorageItem(CUSTOM_PERFORMERS_STORAGE_KEY, JSON.stringify(nextCustomPerformers));
     this.selectPerformer(performer);
 
     return performer;
@@ -163,7 +166,10 @@ export class PerformerLookupService {
         (performer) => performer.id !== summary.id,
       );
       this.customPerformers.set(updatedCustomPerformers);
-      localStorage.setItem(customPerformersStorageKey, JSON.stringify(updatedCustomPerformers));
+      this.setLocalStorageItem(
+        CUSTOM_PERFORMERS_STORAGE_KEY,
+        JSON.stringify(updatedCustomPerformers),
+      );
 
       const updatedGeneratedPerformers = this.generatedPerformers().filter(
         (performer) => performer.id !== summary.id,
@@ -172,19 +178,19 @@ export class PerformerLookupService {
 
       const updatedHiddenIds = this.hiddenGeneratedPerformerIds().filter((id) => id !== summary.id);
       this.hiddenGeneratedPerformerIds.set(updatedHiddenIds);
-      localStorage.setItem(hiddenPerformerIdsStorageKey, JSON.stringify(updatedHiddenIds));
+      this.setLocalStorageItem(HIDDEN_PERFORMER_IDS_STORAGE_KEY, JSON.stringify(updatedHiddenIds));
 
       if (this.selectedId() === summary.id) {
         this.selectedId.set(undefined);
         this.selectedProfileState.set(undefined);
-        sessionStorage.removeItem(selectedPerformerIdStorageKey);
+        this.removeSessionStorageItem(SELECTED_PERFORMER_ID_STORAGE_KEY);
       }
     });
   }
 
   selectPerformer(summary: CatalogEntitySummary): void {
     this.selectedId.set(summary.id);
-    sessionStorage.setItem(selectedPerformerIdStorageKey, summary.id);
+    this.setSessionStorageItem(SELECTED_PERFORMER_ID_STORAGE_KEY, summary.id);
 
     if (!summary.profilePath) {
       this.selectedProfileState.set({
@@ -353,7 +359,7 @@ export class PerformerLookupService {
         .map((performer) => (performer.id === summary.id ? normalizedSummary : performer))
         .sort((first, second) => first.name.localeCompare(second.name));
       this.customPerformers.set(nextCustomPerformers);
-      localStorage.setItem(customPerformersStorageKey, JSON.stringify(nextCustomPerformers));
+      this.setLocalStorageItem(CUSTOM_PERFORMERS_STORAGE_KEY, JSON.stringify(nextCustomPerformers));
       return;
     }
 
@@ -365,7 +371,7 @@ export class PerformerLookupService {
 
       const nextCustomPerformers = customPerformers.filter((performer) => performer.id !== summary.id);
       this.customPerformers.set(nextCustomPerformers);
-      localStorage.setItem(customPerformersStorageKey, JSON.stringify(nextCustomPerformers));
+      this.setLocalStorageItem(CUSTOM_PERFORMERS_STORAGE_KEY, JSON.stringify(nextCustomPerformers));
       return;
     }
 
@@ -373,12 +379,12 @@ export class PerformerLookupService {
       first.name.localeCompare(second.name),
     );
     this.customPerformers.set(nextCustomPerformers);
-    localStorage.setItem(customPerformersStorageKey, JSON.stringify(nextCustomPerformers));
+    this.setLocalStorageItem(CUSTOM_PERFORMERS_STORAGE_KEY, JSON.stringify(nextCustomPerformers));
   }
 
   private readCustomPerformers(): readonly CatalogEntitySummary[] {
     try {
-      const value = localStorage.getItem(customPerformersStorageKey);
+      const value = localStorage.getItem(CUSTOM_PERFORMERS_STORAGE_KEY);
       const performers = value ? (JSON.parse(value) as readonly CatalogEntitySummary[]) : [];
 
       return performers.filter(
@@ -408,12 +414,12 @@ export class PerformerLookupService {
 
     const nextCustom = this.customPerformers().map(applyStatus);
     this.customPerformers.set(nextCustom);
-    localStorage.setItem(customPerformersStorageKey, JSON.stringify(nextCustom));
+    this.setLocalStorageItem(CUSTOM_PERFORMERS_STORAGE_KEY, JSON.stringify(nextCustom));
   }
 
   private readHiddenGeneratedPerformerIds(): readonly string[] {
     try {
-      const value = localStorage.getItem(hiddenPerformerIdsStorageKey);
+      const value = localStorage.getItem(HIDDEN_PERFORMER_IDS_STORAGE_KEY);
       const ids = value ? (JSON.parse(value) as readonly unknown[]) : [];
 
       return ids.filter((id): id is string => typeof id === 'string');
@@ -424,7 +430,7 @@ export class PerformerLookupService {
 
   private readSelectedPerformerId(): string | undefined {
     try {
-      const value = sessionStorage.getItem(selectedPerformerIdStorageKey);
+      const value = sessionStorage.getItem(SELECTED_PERFORMER_ID_STORAGE_KEY);
       return value?.trim() || undefined;
     } catch {
       return undefined;
@@ -445,6 +451,21 @@ export class PerformerLookupService {
     if (summary) {
       this.selectPerformer(summary);
     }
+  }
+
+  private setLocalStorageItem(key: string, value: string): void {
+    localStorage.setItem(key, value);
+    this.sessionFileAccess.syncSessionToDisk();
+  }
+
+  private setSessionStorageItem(key: string, value: string): void {
+    sessionStorage.setItem(key, value);
+    this.sessionFileAccess.syncSessionToDisk();
+  }
+
+  private removeSessionStorageItem(key: string): void {
+    sessionStorage.removeItem(key);
+    this.sessionFileAccess.syncSessionToDisk();
   }
 }
 

@@ -1,4 +1,12 @@
-import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  DestroyRef,
+  computed,
+  effect,
+  inject,
+  signal,
+} from '@angular/core';
 import { HttpErrorResponse } from '@angular/common/http';
 import { FormControl, FormGroup } from '@angular/forms';
 import { finalize } from 'rxjs';
@@ -10,6 +18,10 @@ import { PerformerLookupSectionComponent } from './components/performer-lookup-s
 import { CatalogEntitySummary } from './models';
 import { BraveSearchService } from './services/brave-search/brave-search.service';
 import { PerformerLookupService } from './services/performers/performer-lookup.service';
+import {
+  DEBUG_LOGS_STORAGE_KEY,
+  SessionFileAccessService,
+} from './services/session-file-access/session-file-access.service';
 
 @Component({
   selector: 'app-root',
@@ -26,8 +38,11 @@ import { PerformerLookupService } from './services/performers/performer-lookup.s
 export class App {
   private readonly performerLookup = inject(PerformerLookupService);
   private readonly braveSearch = inject(BraveSearchService);
+  private readonly sessionFileAccess = inject(SessionFileAccessService);
+  private readonly destroyRef = inject(DestroyRef);
   private readonly maxDebugLogEntries = 250;
-  private readonly debugLogsStorageKey = 'performer-catalog.missing-lookup-debug-logs';
+  private fileAccessBannerTimeoutId: ReturnType<typeof setTimeout> | undefined;
+  private awaitingFileAccessDecision = false;
 
   readonly performers = this.performerLookup.performers;
   readonly allPerformers = this.performerLookup.allPerformers;
@@ -45,6 +60,13 @@ export class App {
   readonly fetchDialogPerformer = signal<CatalogEntitySummary | undefined>(undefined);
   readonly fetchDialogError = signal<string | undefined>(undefined);
   readonly fetchDialogLoading = signal(false);
+  readonly sessionFileAccessSupported = this.sessionFileAccess.supported;
+  readonly sessionFileHandleStored = this.sessionFileAccess.hasStoredHandle;
+  readonly sessionFileAccessState = this.sessionFileAccess.accessState;
+  readonly sessionFileName = this.sessionFileAccess.fileName;
+  readonly sessionFileAccessBusy = this.sessionFileAccess.busy;
+  readonly showFileAccessBanner = signal(false);
+  readonly fileAccessBannerState = signal<'prompt' | 'success'>('prompt');
   readonly selectedAge = computed(() => {
     const birthday = this.selectedProfile()?.birthday;
 
@@ -56,9 +78,77 @@ export class App {
   });
 
   constructor() {
+    const saveSessionOnPageExit = (reason: string): void => {
+      this.sessionFileAccess.flushSessionToDisk(reason);
+    };
+    const saveSessionWhenHidden = (): void => {
+      if (document.visibilityState !== 'hidden') {
+        return;
+      }
+
+      saveSessionOnPageExit('document hidden');
+    };
+    const saveSessionOnPageHide = (): void => saveSessionOnPageExit('pagehide');
+    const saveSessionBeforeUnload = (): void => saveSessionOnPageExit('beforeunload');
+
     this.lookupForm.controls.search.valueChanges.subscribe((value) =>
       this.performerLookup.updateSearchTerm(value),
     );
+
+    effect(() => {
+      const supported = this.sessionFileAccessSupported();
+      const hasStoredHandle = this.sessionFileHandleStored();
+      const accessState = this.sessionFileAccessState();
+      const busy = this.sessionFileAccessBusy();
+
+      if (!supported) {
+        this.hideFileAccessBanner();
+        return;
+      }
+
+      if (!this.awaitingFileAccessDecision || busy) {
+        if (accessState === 'granted') {
+          this.hideFileAccessBanner();
+          return;
+        }
+
+        if (hasStoredHandle && accessState === 'prompt') {
+          this.showPromptBanner();
+          return;
+        }
+
+        if (!hasStoredHandle && accessState === 'not-configured') {
+          this.showPromptBanner();
+          return;
+        }
+
+        this.hideFileAccessBanner();
+        return;
+      }
+
+      this.awaitingFileAccessDecision = false;
+
+      if (accessState === 'granted') {
+        this.showSuccessBanner();
+        return;
+      }
+
+      this.hideFileAccessBanner();
+    });
+
+    this.destroyRef.onDestroy(() => {
+      document.removeEventListener('visibilitychange', saveSessionWhenHidden);
+      window.removeEventListener('pagehide', saveSessionOnPageHide);
+      window.removeEventListener('beforeunload', saveSessionBeforeUnload);
+
+      if (this.fileAccessBannerTimeoutId) {
+        clearTimeout(this.fileAccessBannerTimeoutId);
+      }
+    });
+
+    document.addEventListener('visibilitychange', saveSessionWhenHidden);
+    window.addEventListener('pagehide', saveSessionOnPageHide);
+    window.addEventListener('beforeunload', saveSessionBeforeUnload);
   }
 
   selectPerformer(summary: CatalogEntitySummary): void {
@@ -80,6 +170,15 @@ export class App {
     this.performerLookup.addPerformer(name);
     this.lookupForm.reset({ search: '' });
     this.addError.set(undefined);
+  }
+
+  requestSessionFileAccess(): void {
+    this.awaitingFileAccessDecision = true;
+    void this.sessionFileAccess.requestAccess();
+  }
+
+  dismissSessionFileAccessBanner(): void {
+    this.hideFileAccessBanner();
   }
 
   requestAutoUpdateForMissingPerformers(): void {
@@ -212,14 +311,15 @@ export class App {
     this.missingLookupDebugLogs.update((logs) => {
       const nextLogs = [...logs, entry];
       const trimmedLogs = nextLogs.slice(-this.maxDebugLogEntries);
-      sessionStorage.setItem(this.debugLogsStorageKey, JSON.stringify(trimmedLogs));
+      sessionStorage.setItem(DEBUG_LOGS_STORAGE_KEY, JSON.stringify(trimmedLogs));
+      this.sessionFileAccess.syncSessionToDisk();
       return trimmedLogs;
     });
   }
 
   private readMissingLookupDebugLogs(): readonly string[] {
     try {
-      const raw = sessionStorage.getItem(this.debugLogsStorageKey);
+      const raw = sessionStorage.getItem(DEBUG_LOGS_STORAGE_KEY);
       const logs = raw ? (JSON.parse(raw) as readonly unknown[]) : [];
       return logs
         .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
@@ -227,6 +327,41 @@ export class App {
     } catch {
       return [];
     }
+  }
+
+  private showPromptBanner(): void {
+    if (this.fileAccessBannerTimeoutId) {
+      clearTimeout(this.fileAccessBannerTimeoutId);
+      this.fileAccessBannerTimeoutId = undefined;
+    }
+
+    this.fileAccessBannerState.set('prompt');
+    this.showFileAccessBanner.set(true);
+  }
+
+  private showSuccessBanner(): void {
+    this.fileAccessBannerState.set('success');
+    this.showFileAccessBanner.set(true);
+
+    if (this.fileAccessBannerTimeoutId) {
+      clearTimeout(this.fileAccessBannerTimeoutId);
+    }
+
+    this.fileAccessBannerTimeoutId = setTimeout(() => {
+      this.showFileAccessBanner.set(false);
+      this.fileAccessBannerTimeoutId = undefined;
+    }, 1500);
+  }
+
+  private hideFileAccessBanner(): void {
+    if (this.fileAccessBannerTimeoutId) {
+      clearTimeout(this.fileAccessBannerTimeoutId);
+      this.fileAccessBannerTimeoutId = undefined;
+    }
+
+    this.awaitingFileAccessDecision = false;
+    this.showFileAccessBanner.set(false);
+    this.fileAccessBannerState.set('prompt');
   }
 }
 
