@@ -149,6 +149,7 @@ export class PerformerListSectionComponent {
     }
 
     if (actionId === this.fetchPerformerInfo) {
+      this.performerSelected.emit(menu.performer);
       this.performerFetchRequested.emit(menu.performer);
       this.contextMenu.set(undefined);
     }

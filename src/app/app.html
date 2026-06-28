@@ -4,7 +4,10 @@
       <app-performer-lookup-section
         [lookupForm]="lookupForm"
         [addError]="addError()"
+        [missingPerformerCount]="missingPerformerCount()"
+        [missingLookupInProgress]="missingLookupInProgress()"
         (addPerformer)="addPerformer()"
+        (autoUpdateRequested)="requestAutoUpdateForMissingPerformers()"
       />
 
       <app-performer-list-section
@@ -16,12 +19,34 @@
       />
     </aside>
 
-    <app-performer-details-section
-      [profile]="selectedProfile()"
-      [selectedAge]="selectedAge()"
-      [creditsOpen]="creditsOpen()"
-      (toggleCredits)="toggleCredits()"
-    />
+    <section class="detail-debug-column" aria-label="Performer details and lookup logs">
+      <app-performer-details-section
+        [profile]="selectedProfile()"
+        [selectedAge]="selectedAge()"
+        [creditsOpen]="creditsOpen()"
+        (toggleCredits)="toggleCredits()"
+      />
+
+      <section class="missing-lookup-debug" aria-label="Missing lookup debug output">
+        <h2>Missing Lookup Debug</h2>
+        <p class="debug-stats">
+          {{ missingLookupInProgress() ? 'Running lookup...' : 'Idle' }} |
+          Missing: {{ missingPerformerCount() }} |
+          No info found: {{ noInfoFoundCount() }} |
+          Total performers: {{ allPerformers().length }}
+        </p>
+
+        <div class="debug-console" aria-live="polite">
+          @if (missingLookupDebugLogs().length === 0) {
+            <p class="debug-empty">No logs yet. Click Search to begin.</p>
+          } @else {
+            @for (entry of missingLookupDebugLogs(); track $index) {
+              <div class="debug-line">{{ entry }}</div>
+            }
+          }
+        </div>
+      </section>
+    </section>
   </section>
 
   @if (fetchDialogPerformer(); as performer) {
@@ -34,4 +59,5 @@
       (cancelRequested)="closeFetchDialog()"
     />
   }
+
 </main>

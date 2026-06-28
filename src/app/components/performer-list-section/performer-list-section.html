@@ -28,7 +28,7 @@
               </span>
             }
             @if (!performer.completed) {
-              <span class="status">Pending</span>
+              <span class="status">{{ performer.noInfoFound ? 'No info found' : 'Missing' }}</span>
             }
           </span>
         </button>

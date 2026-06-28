@@ -50,6 +50,5 @@ Thumbs.db
 collect-data.log
 list.txt
 logs/*
-public/**/*.json
-public/template.html
+public/*
 tools/*

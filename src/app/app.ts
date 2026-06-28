@@ -1,6 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
 import { HttpErrorResponse } from '@angular/common/http';
 import { FormControl, FormGroup } from '@angular/forms';
+import { finalize } from 'rxjs';
 
 import { PerformerDetailsSectionComponent } from './components/performer-details-section/performer-details-section';
 import { PerformerFetchDialogComponent } from './components/performer-fetch-dialog/performer-fetch-dialog';
@@ -25,11 +26,22 @@ import { PerformerLookupService } from './services/performers/performer-lookup.s
 export class App {
   private readonly performerLookup = inject(PerformerLookupService);
   private readonly braveSearch = inject(BraveSearchService);
+  private readonly maxDebugLogEntries = 250;
+  private readonly debugLogsStorageKey = 'performer-catalog.missing-lookup-debug-logs';
 
   readonly performers = this.performerLookup.performers;
+  readonly allPerformers = this.performerLookup.allPerformers;
   readonly selectedProfile = this.performerLookup.selectedProfile;
   readonly selectedPerformerId = this.performerLookup.selectedPerformerId;
   readonly addError = signal<string | undefined>(undefined);
+  readonly missingPerformerCount = computed(
+    () => this.allPerformers().filter((performer) => !performer.completed && !performer.noInfoFound).length,
+  );
+  readonly noInfoFoundCount = computed(
+    () => this.allPerformers().filter((performer) => performer.noInfoFound).length,
+  );
+  readonly missingLookupInProgress = signal(false);
+  readonly missingLookupDebugLogs = signal<readonly string[]>(this.readMissingLookupDebugLogs());
   readonly fetchDialogPerformer = signal<CatalogEntitySummary | undefined>(undefined);
   readonly fetchDialogError = signal<string | undefined>(undefined);
   readonly fetchDialogLoading = signal(false);
@@ -68,6 +80,42 @@ export class App {
     this.performerLookup.addPerformer(name);
     this.lookupForm.reset({ search: '' });
     this.addError.set(undefined);
+  }
+
+  requestAutoUpdateForMissingPerformers(): void {
+    if (this.missingLookupInProgress()) {
+      this.appendMissingLookupLog('Lookup request ignored because a lookup is already in progress.');
+      return;
+    }
+
+    const missingBefore = this.missingPerformerCount();
+    this.appendMissingLookupLog(`Starting missing-info lookup for ${missingBefore} performer(s).`);
+    this.missingLookupInProgress.set(true);
+    this.performerLookup
+      .lookupMissingPerformerInfo(this.allPerformers())
+      .pipe(
+        finalize(() => {
+          this.missingLookupInProgress.set(false);
+          this.appendMissingLookupLog(
+            `Lookup complete. Missing: ${this.missingPerformerCount()}, No info found: ${this.noInfoFoundCount()}.`,
+          );
+        }),
+      )
+      .subscribe({
+        next: (response) => {
+          for (const logLine of response.debugLogs ?? []) {
+            this.appendMissingLookupLog(logLine);
+          }
+          const summaries = response.summaries ?? [];
+          this.appendMissingLookupLog(`Proxy returned ${summaries.length} updated performer record(s).`);
+        },
+        error: () => {
+          this.appendMissingLookupLog('Lookup failed. Proxy unavailable or request error.');
+          this.addError.set(
+            'Unable to run missing-info search right now. Start the proxy with `npm run start:proxy` and try again.',
+          );
+        },
+      });
   }
 
   openFetchDialog(summary: CatalogEntitySummary): void {
@@ -110,18 +158,75 @@ export class App {
   searchWithoutIafdLink(): void {
     const performer = this.fetchDialogPerformer();
 
-    if (!performer) {
+    if (!performer || this.fetchDialogLoading()) {
       return;
     }
 
-    const searchUrl = this.braveSearch.createIafdSearchUrl(performer.name);
-    window.open(searchUrl, '_blank', 'noopener');
+    this.appendMissingLookupLog(`Modal search started for "${performer.name}" (${performer.id}).`);
+    this.fetchDialogLoading.set(true);
+    this.fetchDialogError.set(undefined);
+    this.performerLookup.lookupPerformerInfoWithoutLink(performer).subscribe({
+      next: (response) => {
+        for (const logLine of response.debugLogs ?? []) {
+          this.appendMissingLookupLog(logLine);
+        }
+        const summaries = response.summaries ?? [];
+        this.appendMissingLookupLog(
+          `Modal search completed for "${performer.name}". Updated records: ${summaries.length}.`,
+        );
+
+        if (summaries.length === 0) {
+          this.fetchDialogError.set(
+            'Search finished but no profile updates were returned for this performer.',
+          );
+          this.fetchDialogLoading.set(false);
+          return;
+        }
+
+        this.closeFetchDialog();
+      },
+      error: (error: unknown) => {
+        this.appendMissingLookupLog(
+          `Modal search failed for "${performer.name}".`,
+        );
+        const message =
+          error instanceof Error
+            ? error.message
+            : 'Unable to run search without link right now.';
+        this.fetchDialogError.set(message);
+        this.fetchDialogLoading.set(false);
+      },
+    });
   }
 
   creditsOpen = signal(false);
 
   toggleCredits(): void {
     this.creditsOpen.update((open) => !open);
+  }
+
+  private appendMissingLookupLog(message: string): void {
+    const timestamp = new Date().toLocaleTimeString();
+    const entry = `[${timestamp}] ${message}`;
+    console.log(entry);
+    this.missingLookupDebugLogs.update((logs) => {
+      const nextLogs = [...logs, entry];
+      const trimmedLogs = nextLogs.slice(-this.maxDebugLogEntries);
+      sessionStorage.setItem(this.debugLogsStorageKey, JSON.stringify(trimmedLogs));
+      return trimmedLogs;
+    });
+  }
+
+  private readMissingLookupDebugLogs(): readonly string[] {
+    try {
+      const raw = sessionStorage.getItem(this.debugLogsStorageKey);
+      const logs = raw ? (JSON.parse(raw) as readonly unknown[]) : [];
+      return logs
+        .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+        .slice(-this.maxDebugLogEntries);
+    } catch {
+      return [];
+    }
   }
 }
 

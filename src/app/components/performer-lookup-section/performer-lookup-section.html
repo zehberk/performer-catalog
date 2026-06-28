@@ -12,6 +12,30 @@
   </form>
 
   <button type="button" class="add-button" (click)="onAddPerformer()">Add</button>
+
+  @if (showMissingSearchPrompt && missingPerformerCount() > 0) {
+    <div class="missing-row">
+      <p class="missing-message">
+        {{ missingPerformerCount() }} performers missing data. Perform search?
+      </p>
+
+      <div class="missing-actions">
+        <button
+          type="button"
+          class="missing-button"
+          [disabled]="missingLookupInProgress()"
+          (click)="onMissingSearchRequested()"
+        >
+          {{ missingLookupInProgress() ? 'Searching...' : 'Search' }}
+        </button>
+
+        <button type="button" class="missing-button secondary" (click)="onMissingSearchCancelled()">
+          Dismiss
+        </button>
+      </div>
+    </div>
+  }
+
   @if (addError()) {
     <p class="form-error" role="alert">{{ addError() }}</p>
   }

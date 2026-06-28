@@ -117,6 +117,46 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (urlObj.pathname === '/performers/lookup-missing' && method === 'POST') {
+      if (!braveSearchApiKey) {
+        res.writeHead(500, {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Access-Control-Allow-Origin': '*',
+        });
+        res.end(JSON.stringify({ error: 'Missing BRAVE_SEARCH_API_KEY in proxy environment.' }));
+        return;
+      }
+
+      const payload = await readJsonBody(req);
+      const performers = Array.isArray(payload?.performers) ? payload.performers : [];
+      const forceLookup = Boolean(payload?.force);
+      const summaries = [];
+      const debugLogs = [];
+
+      for (const performer of performers) {
+        const trace = [];
+        const summary = await lookupMissingPerformerInfo(performer, {
+          forceLookup,
+          log: (message) => trace.push(message),
+        });
+
+        if (trace.length > 0) {
+          debugLogs.push(...trace);
+        }
+
+        if (summary) {
+          summaries.push(summary);
+        }
+      }
+
+      res.writeHead(200, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Access-Control-Allow-Origin': '*',
+      });
+      res.end(JSON.stringify({ summaries, debugLogs }));
+      return;
+    }
+
     if (urlObj.pathname !== '/fetch' || method !== 'GET') {
       res.writeHead(404, { 'Content-Type': 'text/plain' });
       res.end('Not found');
@@ -131,25 +171,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    const b = await getBrowser();
-    const context = await b.newContext({
-      userAgent:
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
-      extraHTTPHeaders: {
-        'accept-language': 'en-US,en;q=0.9',
-      },
-    });
-
-    const page = await context.newPage();
-
-    try {
-      await page.goto(target, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    } catch (err) {
-      // continue and try to get content even if navigation had non-fatal errors
-    }
-
-    const content = await page.content();
-    await context.close();
+    const content = await fetchHtmlThroughPlaywright(target);
 
     res.writeHead(200, {
       'Content-Type': 'text/html; charset=utf-8',
@@ -195,6 +217,7 @@ async function savePerformerProfile(profile) {
     searchName: profile.searchName,
     aliases: Array.isArray(profile.aka) ? profile.aka : undefined,
     completed: Boolean(profile.completed),
+    noInfoFound: Boolean(profile.noInfoFound),
     type: 'performer',
     profilePath: `data/performers/${profile.id}.json`,
   };
@@ -252,6 +275,188 @@ async function fetchModelLinksFromBrave(name) {
   return links;
 }
 
+async function lookupMissingPerformerInfo(rawPerformer, options = {}) {
+  const performer = normalizeLookupPerformer(rawPerformer);
+  const forceLookup = Boolean(options.forceLookup);
+  const log = typeof options.log === 'function' ? options.log : () => {};
+
+  if (!performer) {
+    log('Skipped invalid performer payload.');
+    return undefined;
+  }
+  log(`[${performer.id}] Starting lookup for "${performer.name}".`);
+
+  if (!forceLookup && (performer.completed || performer.noInfoFound)) {
+    log(`[${performer.id}] Skipped: already completed or no-info-found.`);
+    return undefined;
+  }
+
+  const existingProfile = await readPerformerProfile(performer.id);
+  const currentProfile = buildWorkingProfile(performer, existingProfile);
+  log(
+    `[${performer.id}] Existing profile loaded: ${
+      existingProfile ? 'yes' : 'no'
+    }, dataLinks: ${currentProfile.dataLinks?.length ?? 0}.`,
+  );
+
+  // Source 1: Brave "<performer> babepedia" -> Babepedia Playwright parse.
+  const babepediaUrl = await findBabepediaUrlFromBrave(currentProfile.name);
+  log(
+    `[${performer.id}] Source 1 Brave(Babepedia): ${
+      babepediaUrl ? `found ${babepediaUrl}` : 'no valid Babepedia URL found'
+    }.`,
+  );
+  const babepediaProfile = babepediaUrl
+    ? await tryLoadBabepediaProfile(currentProfile, babepediaUrl)
+    : undefined;
+
+  if (babepediaProfile) {
+    log(`[${performer.id}] Source 1 Babepedia parse succeeded. Saving profile.`);
+    return savePerformerProfile(babepediaProfile);
+  }
+  log(`[${performer.id}] Source 1 Babepedia parse returned no usable data.`);
+
+  // Source 2: Pornhub data-link fallback.
+  const pornhubLink = findPornhubProfileLink(currentProfile.dataLinks);
+  log(
+    `[${performer.id}] Source 2 Pornhub data-link: ${
+      pornhubLink ? `using ${pornhubLink}` : 'no Pornhub profile data-link present'
+    }.`,
+  );
+  const pornhubProfile = pornhubLink
+    ? await tryLoadPornhubProfile(currentProfile, pornhubLink)
+    : undefined;
+
+  if (pornhubProfile) {
+    log(`[${performer.id}] Source 2 Pornhub parse succeeded. Saving profile.`);
+    return savePerformerProfile(pornhubProfile);
+  }
+  log(`[${performer.id}] Source 2 Pornhub parse returned no usable data.`);
+
+  // Neither source returned usable data.
+  const noInfoProfile = removeEmptyValues({
+    ...currentProfile,
+    completed: false,
+    noInfoFound: true,
+  });
+  log(`[${performer.id}] No usable data from either source. Marking noInfoFound.`);
+
+  return savePerformerProfile(noInfoProfile);
+}
+
+async function tryLoadPornhubProfile(profile, url) {
+  if (!isPornhubProfileUrl(url)) {
+    return undefined;
+  }
+
+  const html = await fetchHtmlThroughPlaywright(url);
+
+  if (!html || isPornhubAgeVerificationPage(html)) {
+    return undefined;
+  }
+
+  const scanned = scanPornhubProfileHtml(html);
+
+  if (!isUsableScanResult(scanned)) {
+    return undefined;
+  }
+
+  return mergeScannedData(profile, {
+    ...scanned,
+    dataLinks: mergeDataLinks(profile.dataLinks, [{ label: 'Pornhub', source: 'ph', url }]),
+    noInfoFound: false,
+  });
+}
+
+async function tryLoadBabepediaProfile(profile, url) {
+  if (!isValidBabepediaPerformerUrl(url)) {
+    return undefined;
+  }
+
+  const html = await fetchHtmlThroughPlaywright(url);
+
+  if (!html) {
+    return undefined;
+  }
+
+  const scanned = scanBabepediaProfileHtml(html);
+
+  if (!isUsableScanResult(scanned)) {
+    return undefined;
+  }
+
+  return mergeScannedData(profile, {
+    ...scanned,
+    dataLinks: mergeDataLinks(profile.dataLinks, [{ label: 'Babepedia', source: 'web', url }]),
+    noInfoFound: false,
+  });
+}
+
+async function findBabepediaUrlFromBrave(name) {
+  const trimmedName = String(name ?? '').trim();
+
+  if (!trimmedName) {
+    return undefined;
+  }
+
+  const url = new URL(braveSearchUrl);
+  url.search = new URLSearchParams({
+    q: `${trimmedName} babepedia`,
+    count: '10',
+    country: 'us',
+    search_lang: 'en',
+  });
+
+  let response;
+
+  try {
+    response = await fetch(url, {
+      headers: {
+        Accept: 'application/json',
+        'X-Subscription-Token': braveSearchApiKey,
+      },
+    });
+  } catch {
+    return undefined;
+  }
+
+  if (!response.ok) {
+    return undefined;
+  }
+
+  const result = await response.json();
+  const webResults = Array.isArray(result.web?.results) ? result.web.results : [];
+  const candidate = webResults.find((item) => isValidBabepediaPerformerUrl(item?.url));
+
+  return typeof candidate?.url === 'string' ? candidate.url : undefined;
+}
+
+async function fetchHtmlThroughPlaywright(target) {
+  try {
+    const b = await getBrowser();
+    const context = await b.newContext({
+      userAgent:
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
+      extraHTTPHeaders: {
+        'accept-language': 'en-US,en;q=0.9',
+      },
+    });
+    const page = await context.newPage();
+
+    try {
+      await page.goto(target, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    } catch {
+      // Keep going and attempt to read HTML from partially loaded pages.
+    }
+
+    const content = await page.content();
+    await context.close();
+    return content;
+  } catch {
+    return undefined;
+  }
+}
+
 async function deletePerformerProfile(performerId) {
   const performerPath = path.join(performersDirectoryPath, `${performerId}.json`);
 
@@ -297,6 +502,500 @@ function inferDataSource(url) {
   }
 
   return 'web';
+}
+
+function findPornhubProfileLink(dataLinks) {
+  if (!Array.isArray(dataLinks)) {
+    return undefined;
+  }
+
+  const link = dataLinks.find((entry) => isPornhubProfileUrl(entry?.url));
+  return typeof link?.url === 'string' ? link.url : undefined;
+}
+
+function isPornhubProfileUrl(value) {
+  try {
+    const parsed = new URL(value);
+    const host = parsed.hostname.toLowerCase();
+
+    if (!host.includes('pornhub.com')) {
+      return false;
+    }
+
+    return /^\/(pornstars?|models?)\/[^/]+/i.test(parsed.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function isValidBabepediaPerformerUrl(value) {
+  try {
+    const parsed = new URL(value);
+    const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+
+    if (host !== 'babepedia.com') {
+      return false;
+    }
+
+    return /^\/babe\/[^/]+/i.test(parsed.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function isPornhubAgeVerificationPage(html) {
+  const title = extractTitle(html);
+  const normalizedTitle = normalizeText(title);
+
+  if (normalizedTitle.includes('age verification')) {
+    return true;
+  }
+
+  return (
+    normalizedTitle.includes('dear user') &&
+    normalizeText(html).includes('this website is only intended for users over the age of 18')
+  );
+}
+
+function scanPornhubProfileHtml(html) {
+  const title = extractTitle(html);
+  const normalizedTitle = normalizeText(title);
+  const isPornhubProfilePage =
+    normalizedTitle.includes('verified pornstar profile') ||
+    normalizedTitle.includes('verified model profile') ||
+    /\/(pornstars?|models?)\/[^/]+/i.test(extractMetaContent(html, 'og:url') ?? '');
+
+  if (!isPornhubProfilePage) {
+    return {};
+  }
+
+  const info = extractPornhubInfoMap(html);
+  const description = extractPornhubDescription(html);
+  const descriptionData = extractPornhubDescriptionData(description);
+
+  const profile = removeEmptyValues({
+    completed: true,
+    birthday: descriptionData.birthday,
+    ageStarted: descriptionData.ageStarted,
+    ethnicity: cleanPornhubField(info.get('ethnicity') ?? descriptionData.ethnicity),
+    nationality: cleanPornhubField(info.get('nationality') ?? descriptionData.nationality),
+    height: cleanPornhubField(info.get('height') ?? descriptionData.height),
+    measurements: cleanPornhubField(
+      info.get('measurements') ?? info.get('body measurements') ?? descriptionData.measurements,
+    ),
+  });
+
+  return hasAnyProfileData(profile) ? profile : {};
+}
+
+function scanBabepediaProfileHtml(html) {
+  const canonical = extractCanonicalHref(html);
+  const isPerformerPage =
+    Boolean(canonical && isValidBabepediaPerformerUrl(canonical)) ||
+    normalizeText(extractTitle(html)).includes(' at babepedia');
+
+  if (!isPerformerPage) {
+    return {};
+  }
+
+  const info = extractBabepediaInfoMap(html);
+  const yearsActiveRaw =
+    info.get('years active') ?? extractBabepediaFieldFromHtml(html, 'Years active');
+  const nationalityRaw =
+    info.get('nationality') ?? extractBabepediaFieldFromHtml(html, 'Nationality');
+  const weightRaw = info.get('weight') ?? extractBabepediaFieldFromHtml(html, 'Weight');
+  const bornRaw = info.get('born') ?? info.get('birthday') ?? extractBabepediaFieldFromHtml(html, 'Born');
+  const aliases = splitBabepediaAliases(info.get('aliases') ?? info.get('alias'));
+  const birthday = extractBabepediaBirthday(bornRaw);
+  const yearsActive = cleanBabepediaField(
+    yearsActiveRaw ?? info.get('career start') ?? info.get('career status'),
+  );
+  const ageStarted = extractAgeStartedFromYearsActive(yearsActive);
+  const normalizedYearsActive = stripTrailingParenthetical(yearsActive);
+
+  const profile = removeEmptyValues({
+    completed: true,
+    aka: aliases,
+    birthday,
+    yearsActive: normalizedYearsActive,
+    ageStarted,
+    ethnicity: cleanBabepediaField(info.get('ethnicity')),
+    nationality: normalizeBabepediaNationality(nationalityRaw),
+    hairColor: cleanBabepediaField(info.get('hair color')),
+    eyeColor: cleanBabepediaField(info.get('eye color')),
+    height: cleanBabepediaField(info.get('height')),
+    weight: cleanBabepediaField(weightRaw),
+    measurements: cleanBabepediaField(info.get('measurements')),
+  });
+
+  return hasAnyProfileData(profile) ? profile : {};
+}
+
+function mergeScannedData(profile, scanned) {
+  return removeEmptyValues({
+    ...profile,
+    // Preserve the existing canonical performer name from the catalog/profile.
+    name: profile.name ?? scanned.name,
+    completed: Boolean(scanned.completed),
+    noInfoFound: scanned.noInfoFound,
+    aka: scanned.aka ?? profile.aka,
+    birthday: scanned.birthday ?? profile.birthday,
+    ageStarted: scanned.ageStarted ?? profile.ageStarted,
+    yearsActive: scanned.yearsActive ?? profile.yearsActive,
+    ethnicity: scanned.ethnicity ?? profile.ethnicity,
+    nationality: scanned.nationality ?? profile.nationality,
+    hairColor: scanned.hairColor ?? profile.hairColor,
+    eyeColor: scanned.eyeColor ?? profile.eyeColor,
+    height: scanned.height ?? profile.height,
+    weight: scanned.weight ?? profile.weight,
+    measurements: scanned.measurements ?? profile.measurements,
+    dataLinks: scanned.dataLinks ?? profile.dataLinks,
+  });
+}
+
+function isUsableScanResult(scanned) {
+  return Boolean(scanned?.completed && hasAnyProfileData(scanned));
+}
+
+function extractTitle(html) {
+  const match = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  return cleanValue(match?.[1]);
+}
+
+function extractMetaContent(html, name) {
+  const escapedName = escapeRegex(name);
+  const direct =
+    html.match(
+      new RegExp(
+        `<meta[^>]+(?:name|property)=["']${escapedName}["'][^>]+content=["']([\\s\\S]*?)["'][^>]*>`,
+        'i',
+      ),
+    ) ??
+    html.match(
+      new RegExp(
+        `<meta[^>]+content=["']([\\s\\S]*?)["'][^>]+(?:name|property)=["']${escapedName}["'][^>]*>`,
+        'i',
+      ),
+    );
+
+  return cleanValue(direct?.[1]);
+}
+
+function extractCanonicalHref(html) {
+  const match =
+    html.match(/<link[^>]+rel=["']canonical["'][^>]+href=["']([^"']+)["'][^>]*>/i) ??
+    html.match(/<link[^>]+href=["']([^"']+)["'][^>]+rel=["']canonical["'][^>]*>/i);
+  return cleanValue(match?.[1]);
+}
+
+function cleanProfileName(value) {
+  const cleaned = cleanValue(value);
+
+  if (!cleaned) {
+    return undefined;
+  }
+
+  return cleaned
+    .replace(/\s+-\s+free nude pics.*$/i, '')
+    .replace(/\s+Porn Videos\s+-\s+Verified Pornstar Profile.*$/i, '')
+    .trim();
+}
+
+function extractBabepediaInfoMap(html) {
+  const info = new Map();
+  const labelValuePattern =
+    /<div[^>]*class=["'][^"']*\binfo-item\b[^"']*["'][^>]*>[\s\S]*?<span[^>]*class=["'][^"']*\blabel\b[^"']*["'][^>]*>\s*([^<:]+):?\s*<\/span>\s*<span[^>]*class=["'][^"']*\bvalue\b[^"']*["'][^>]*>([\s\S]*?)<\/span>\s*<\/div>/gi;
+  let match = labelValuePattern.exec(html);
+
+  while (match) {
+    const label = normalizeText(stripHtml(match[1]));
+    const value = cleanValue(stripHtml(match[2]));
+
+    if (label && value) {
+      info.set(label, value);
+    }
+
+    match = labelValuePattern.exec(html);
+  }
+
+  return info;
+}
+
+function splitBabepediaAliases(value) {
+  const cleaned = cleanBabepediaField(value);
+
+  if (!cleaned) {
+    return undefined;
+  }
+
+  const aliases = cleaned
+    .split(/,|\/|\n/)
+    .map((item) => cleanValue(item))
+    .filter(Boolean);
+
+  return aliases.length > 0 ? aliases : undefined;
+}
+
+function extractBabepediaBirthday(value) {
+  const cleaned = cleanBabepediaField(value);
+
+  if (!cleaned) {
+    return undefined;
+  }
+
+  const dateMatch =
+    cleaned.match(/[A-Za-z]+\s+\d{1,2}(?:st|nd|rd|th)?(?:\s+of)?\s+[A-Za-z]+\s+\d{4}/i) ??
+    cleaned.match(/[A-Za-z]+\s+\d{1,2},\s+\d{4}/) ??
+    cleaned.match(/\d{4}-\d{2}-\d{2}/) ??
+    cleaned.match(/\d{1,2}\/\d{1,2}\/\d{4}/);
+
+  const rawDate = cleanValue(dateMatch?.[0] ?? cleaned);
+  if (!rawDate) {
+    return undefined;
+  }
+
+  // Normalize "Sunday 30th of June 2002" -> "June 30, 2002" for reliable Date parsing in UI.
+  const longForm = rawDate.match(
+    /(?:[A-Za-z]+,\s*)?(?:[A-Za-z]+\s+)?(\d{1,2})(?:st|nd|rd|th)?(?:\s+of)?\s+([A-Za-z]+)\s+(\d{4})/i,
+  );
+  if (longForm) {
+    return cleanValue(`${longForm[2]} ${longForm[1]}, ${longForm[3]}`);
+  }
+
+  return rawDate;
+}
+
+function cleanBabepediaField(value) {
+  const cleaned = cleanValue(value);
+
+  if (!cleaned) {
+    return undefined;
+  }
+
+  return cleaned.replace(/\u00a0/g, ' ').trim();
+}
+
+function normalizeBabepediaNationality(value) {
+  const cleaned = cleanBabepediaField(value);
+
+  if (!cleaned) {
+    return undefined;
+  }
+
+  const match = cleaned.match(/\(([^)]+)\)/);
+  return cleanValue(match?.[1] ?? cleaned);
+}
+
+function hasAnyProfileData(profile) {
+  return Boolean(
+    profile?.aka?.length ||
+      profile?.birthday ||
+      profile?.ageStarted ||
+      profile?.yearsActive ||
+      profile?.ethnicity ||
+      profile?.nationality ||
+      profile?.hairColor ||
+      profile?.eyeColor ||
+      profile?.height ||
+      profile?.weight ||
+      profile?.measurements,
+  );
+}
+
+function extractBabepediaFieldFromHtml(html, label) {
+  const escapedLabel = escapeRegex(label);
+  const match = html.match(
+    new RegExp(`${escapedLabel}:\\s*([\\s\\S]{1,200}?)\\s*(?:<br\\s*\\/?>|<\\/div>|<\\/p>|<span class=)`, 'i'),
+  );
+
+  return cleanBabepediaField(stripHtml(match?.[1] ?? ''));
+}
+
+function extractAgeStartedFromYearsActive(yearsActive) {
+  if (!yearsActive) {
+    return undefined;
+  }
+
+  const match = yearsActive.match(/started around (\d{1,2}) years?/i);
+  return match ? Number(match[1]) : undefined;
+}
+
+function stripTrailingParenthetical(value) {
+  const cleaned = cleanBabepediaField(value);
+
+  if (!cleaned) {
+    return undefined;
+  }
+
+  return cleaned.replace(/\s*\([^)]*\)\s*$/u, '').trim();
+}
+
+function stripHtml(value) {
+  const withoutTags = String(value ?? '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/gi, '"');
+
+  return withoutTags.replace(/\s+/g, ' ').trim();
+}
+
+function extractPornhubInfoMap(html) {
+  const info = new Map();
+  const infoPiecePattern =
+    /<div[^>]*class=["'][^"']*\binfoPiece\b[^"']*["'][^>]*>\s*<span[^>]*>\s*([^<:]+):?\s*<\/span>\s*([\s\S]*?)\s*<\/div>/gi;
+  let match = infoPiecePattern.exec(html);
+
+  while (match) {
+    const label = normalizeText(stripHtml(match[1]));
+    const value = cleanValue(stripHtml(match[2]));
+
+    if (label && value) {
+      info.set(label, value);
+    }
+
+    match = infoPiecePattern.exec(html);
+  }
+
+  return info;
+}
+
+function extractPornhubDescription(html) {
+  const descriptionMatch = html.match(
+    /<div[^>]+itemprop=["']description["'][^>]*>([\s\S]*?)<\/div>/i,
+  );
+  return cleanValue(stripHtml(descriptionMatch?.[1] ?? ''));
+}
+
+function extractPornhubDescriptionData(description) {
+  if (!description) {
+    return {};
+  }
+
+  const birthdayMatch = description.match(/born in ([A-Za-z]+\s+\d{4})/i);
+  const ageStartedMatch = description.match(/at age (\d{1,2})/i);
+  const heightFeetMatch = description.match(/(\d'\d{1,2})(?:\s*tall)?/i);
+  const ethnicityMatch = description.match(/half\s+([a-z ]+),\s*half\s+([a-z ]+)/i);
+
+  return removeEmptyValues({
+    birthday: cleanValue(birthdayMatch?.[1]),
+    ageStarted: ageStartedMatch ? Number(ageStartedMatch[1]) : undefined,
+    height: cleanValue(heightFeetMatch?.[1]),
+    ethnicity: ethnicityMatch
+      ? cleanValue(`${ethnicityMatch[1]} / ${ethnicityMatch[2]}`)
+      : undefined,
+  });
+}
+
+function cleanPornhubField(value) {
+  const cleaned = cleanValue(value);
+
+  if (!cleaned) {
+    return undefined;
+  }
+
+  return cleaned.replace(/\s+/g, ' ').trim();
+}
+
+async function readPerformerProfile(performerId) {
+  try {
+    const performerPath = path.join(performersDirectoryPath, `${performerId}.json`);
+    const content = await readFile(performerPath, 'utf8');
+    const parsed = JSON.parse(content);
+    return typeof parsed === 'object' && parsed ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function buildWorkingProfile(performer, existingProfile) {
+  if (existingProfile && typeof existingProfile === 'object') {
+    const normalizedExistingName = normalizeExistingPerformerName(
+      existingProfile.name,
+      performer.searchName,
+      performer.name,
+    );
+
+    return removeEmptyValues({
+      ...existingProfile,
+      id: performer.id,
+      name: normalizedExistingName,
+      searchName: existingProfile.searchName ?? performer.searchName,
+      completed: Boolean(existingProfile.completed),
+      isPerformer: true,
+    });
+  }
+
+  return {
+    id: performer.id,
+    name: performer.name,
+    searchName: performer.searchName,
+    completed: false,
+    noInfoFound: performer.noInfoFound,
+    isPerformer: true,
+  };
+}
+
+function normalizeLookupPerformer(value) {
+  if (!value || typeof value !== 'object') {
+    return undefined;
+  }
+
+  if (typeof value.id !== 'string' || typeof value.name !== 'string') {
+    return undefined;
+  }
+
+  return {
+    id: value.id.trim(),
+    name: value.name.trim(),
+    searchName: cleanValue(value.searchName),
+    completed: Boolean(value.completed),
+    noInfoFound: Boolean(value.noInfoFound),
+  };
+}
+
+function mergeDataLinks(...groups) {
+  const links = groups.flat().filter((item) => item !== undefined);
+
+  if (links.length === 0) {
+    return undefined;
+  }
+
+  return links.filter(
+    (link, index, candidates) =>
+      Boolean(link?.url) && candidates.findIndex((candidate) => candidate.url === link.url) === index,
+  );
+}
+
+function normalizeText(value) {
+  return String(value ?? '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function escapeRegex(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function normalizeExistingPerformerName(existingName, searchName, fallbackName) {
+  const cleanedExisting = cleanValue(existingName);
+
+  if (!cleanedExisting) {
+    return cleanValue(searchName) ?? fallbackName;
+  }
+
+  const pollutedByTitle =
+    /\s-\s+free pics,\s+galleries/i.test(cleanedExisting) ||
+    /\sPorn Videos\s+-\s+Verified Pornstar Profile/i.test(cleanedExisting);
+
+  if (!pollutedByTitle) {
+    return cleanedExisting;
+  }
+
+  return cleanValue(searchName) ?? fallbackName;
 }
 
 function getHostname(url) {

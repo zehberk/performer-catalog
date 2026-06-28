@@ -41,13 +41,15 @@
   grid-auto-rows: min-content;
   min-height: 0;
   gap: 0.25rem;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   padding-right: 0.25rem;
 }
 
 .performer-option {
   display: flex;
   width: 100%;
+  max-width: 100%;
   min-height: 2rem;
   height: 2rem;
   align-items: center;
@@ -62,11 +64,14 @@
   line-height: 1.2;
   cursor: pointer;
   font: inherit;
+  overflow: hidden;
 }
 
 .performer-option > span:first-child {
+  display: block;
   min-width: 0;
-  flex: 1;
+  flex: 0 1 75%;
+  max-width: 75%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -74,10 +79,13 @@
 
 .performer-option__meta {
   display: inline-flex;
-  min-width: 0;
+  margin-left: auto;
+  min-width: fit-content;
+  max-width: 25%;
   flex-shrink: 0;
   align-items: center;
   gap: 0.35rem;
+  justify-content: flex-end;
 }
 
 .status {

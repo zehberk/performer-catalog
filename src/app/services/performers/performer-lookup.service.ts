@@ -9,6 +9,10 @@ import { IafdProfileService } from '../iafd/iafd-profile.service';
 const customPerformersStorageKey = 'performer-catalog.custom-performers';
 const hiddenPerformerIdsStorageKey = 'performer-catalog.hidden-performer-ids';
 const selectedPerformerIdStorageKey = 'performer-catalog.selected-performer-id';
+export interface MissingLookupResponse {
+  readonly summaries?: readonly CatalogEntitySummary[];
+  readonly debugLogs?: readonly string[];
+}
 
 @Injectable({
   providedIn: 'root',
@@ -29,8 +33,7 @@ export class PerformerLookupService {
 
   readonly searchTerm = signal('');
   readonly selectedProfile = this.selectedProfileState.asReadonly();
-  readonly performers = computed<readonly PerformerSearchResult[]>(() => {
-    const searchTerm = this.searchTerm().trim().toLowerCase();
+  readonly allPerformers = computed<readonly PerformerSearchResult[]>(() => {
     const hiddenIds = new Set(this.hiddenGeneratedPerformerIds());
     const generatedPerformers = this.generatedPerformers().filter(
       (performer) => !hiddenIds.has(performer.id),
@@ -50,6 +53,12 @@ export class PerformerLookupService {
     const performers = [...uniquePerformers.values()].sort((first, second) =>
       first.name.localeCompare(second.name),
     );
+
+    return performers;
+  });
+  readonly performers = computed<readonly PerformerSearchResult[]>(() => {
+    const searchTerm = this.searchTerm().trim().toLowerCase();
+    const performers = this.allPerformers();
 
     if (!searchTerm) {
       return performers;
@@ -188,7 +197,10 @@ export class PerformerLookupService {
     }
 
     this.http.get<PerformerProfile>(summary.profilePath).subscribe({
-      next: (profile) => this.selectedProfileState.set(profile),
+      next: (profile) => {
+        this.selectedProfileState.set(profile);
+        this.syncSummaryStatusFromProfile(summary.id, profile);
+      },
       error: () =>
         this.selectedProfileState.set({
           id: summary.id,
@@ -223,6 +235,84 @@ export class PerformerLookupService {
         ),
       ),
     );
+  }
+
+  lookupMissingPerformerInfo(
+    performers: readonly CatalogEntitySummary[],
+  ): Observable<MissingLookupResponse> {
+    const missingPerformers = performers.filter(
+      (performer) => !performer.completed && !performer.noInfoFound,
+    );
+
+    if (missingPerformers.length === 0) {
+      return of({ summaries: [], debugLogs: [] });
+    }
+
+    return this.http
+      .post<MissingLookupResponse>(
+        'http://localhost:3789/performers/lookup-missing',
+        { performers: missingPerformers },
+      )
+      .pipe(
+        map((response) => ({
+          summaries: response.summaries ?? [],
+          debugLogs: response.debugLogs ?? [],
+        })),
+        tap((response) => {
+          const summaries = response.summaries;
+          for (const summary of summaries) {
+            this.upsertPerformerSummary(summary);
+          }
+
+          const selectedId = this.selectedId();
+
+          if (!selectedId) {
+            return;
+          }
+
+          const selectedSummary = summaries.find((summary) => summary.id === selectedId);
+
+          if (!selectedSummary) {
+            return;
+          }
+
+          this.selectPerformer(selectedSummary);
+        }),
+      );
+  }
+
+  lookupPerformerInfoWithoutLink(
+    performer: CatalogEntitySummary,
+  ): Observable<MissingLookupResponse> {
+    return this.http
+      .post<MissingLookupResponse>(
+        'http://localhost:3789/performers/lookup-missing',
+        { performers: [performer], force: true },
+      )
+      .pipe(
+        map((response) => ({
+          summaries: response.summaries ?? [],
+          debugLogs: response.debugLogs ?? [],
+        })),
+        tap((response) => {
+          const summaries = response.summaries;
+          for (const summary of summaries) {
+            this.upsertPerformerSummary(summary);
+          }
+
+          const selectedId = this.selectedId();
+
+          if (!selectedId) {
+            return;
+          }
+
+          const selectedSummary = summaries.find((summary) => summary.id === selectedId);
+
+          if (selectedSummary) {
+            this.selectPerformer(selectedSummary);
+          }
+        }),
+      );
   }
 
   private savePerformerProfile(
@@ -291,10 +381,34 @@ export class PerformerLookupService {
       const value = localStorage.getItem(customPerformersStorageKey);
       const performers = value ? (JSON.parse(value) as readonly CatalogEntitySummary[]) : [];
 
-      return performers.filter((performer) => performer.type === 'performer');
+      return performers.filter(
+        (performer) =>
+          performer.type === 'performer' &&
+          typeof performer.id === 'string' &&
+          typeof performer.name === 'string' &&
+          performer.name.trim().length > 0,
+      );
     } catch {
       return [];
     }
+  }
+
+  private syncSummaryStatusFromProfile(profileId: string, profile: PerformerProfile): void {
+    const applyStatus = <T extends CatalogEntitySummary>(performer: T): T =>
+      performer.id === profileId
+        ? ({
+            ...performer,
+            completed: Boolean(profile.completed),
+            noInfoFound: Boolean(profile.noInfoFound),
+          } as T)
+        : performer;
+
+    const nextGenerated = this.generatedPerformers().map(applyStatus);
+    this.generatedPerformers.set(nextGenerated);
+
+    const nextCustom = this.customPerformers().map(applyStatus);
+    this.customPerformers.set(nextCustom);
+    localStorage.setItem(customPerformersStorageKey, JSON.stringify(nextCustom));
   }
 
   private readHiddenGeneratedPerformerIds(): readonly string[] {

@@ -39,7 +39,9 @@
         }
       </div>
 
-      <span class="detail-status">{{ profileValue.completed ? 'Collected' : 'Pending' }}</span>
+      <span class="detail-status">{{
+        profileValue.completed ? 'Collected' : profileValue.noInfoFound ? 'No info found' : 'Missing'
+      }}</span>
     </div>
 
     <dl class="profile-grid">
@@ -97,10 +99,22 @@
           <dd>{{ profileValue.height }}</dd>
         </div>
       }
+      @if (profileValue.weight) {
+        <div>
+          <dt>Weight</dt>
+          <dd>{{ profileValue.weight }}</dd>
+        </div>
+      }
       @if (profileValue.measurements) {
         <div>
           <dt>Measurements</dt>
           <dd>{{ profileValue.measurements }}</dd>
+        </div>
+      }
+      @if (profileValue.shoeSize) {
+        <div>
+          <dt>Shoe size</dt>
+          <dd>{{ profileValue.shoeSize }}</dd>
         </div>
       }
     </dl>

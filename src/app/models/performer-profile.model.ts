@@ -18,6 +18,7 @@ export interface CatalogEntitySummary {
   readonly searchName?: string;
   readonly aliases?: readonly string[];
   readonly completed: boolean;
+  readonly noInfoFound?: boolean;
   readonly type: CatalogEntityType;
   readonly profilePath: string;
 }
@@ -38,6 +39,7 @@ export interface PerformerProfile {
   readonly name: string;
   readonly searchName?: string;
   readonly completed: boolean;
+  readonly noInfoFound?: boolean;
   readonly isPerformer: boolean;
   readonly aka?: readonly string[];
   // September 6, 1996 or 05/15/19?? or 05/15/????
